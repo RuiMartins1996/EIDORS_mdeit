@@ -1,0 +1,202 @@
+function data =fwd_solve_1st_order_mdeit(img)
+% FWD_SOLVE_1ST_ORDER: data= fwd_solve_1st_order( img)
+% First order FEM forward solver
+% Input:
+%    img       = image struct
+% Output:
+%    data = measurements struct
+% Options: (to return internal FEM information)
+%    img.fwd_solve.get_all_meas = 1 (data.volt = all FEM nodes, but not CEM)
+%    img.fwd_solve.get_all_nodes= 1 (data.volt = all nodes, including CEM)
+%    img.fwd_solve.get_elec_curr= 1 (data.elec_curr = current on electrodes)
+%
+% Model Reduction: use precomputed fields to reduce the size of
+%    the forward solution. Nodes which are 1) not used in the output
+%    (i.e. not electrodes) 2) all connected to the same conductivity via
+%    the c2f mapping are applicable.
+% see: Model Reduction for FEM Forward Solutions, Adler & Lionheart, EIT2016
+%
+%    img.fwd_model.model_reduction = @calc_model_reduction;
+%       where the functionputs a struct with fields: main_region, regions
+%       OR
+%    img.fwd_model.model_reduction.main_region = vector, and 
+%    img.fwd_model.model_reduction.regions = struct
+
+% (C) 1995-2017 Andy Adler. License: GPL version 2 or version 3
+% $Id: fwd_solve_1st_order.m 6308 2022-04-20 18:00:26Z aadler $
+
+% correct input paralemeters if function was called with only img
+
+fwd_model= img.fwd_model;
+
+img = data_mapper(img);
+if ~ismember(img.current_params, supported_params)
+    error('EIDORS:PhysicsNotSupported', '%s does not support %s', ...
+    'FWD_SOLVE_1ST_ORDER',img.current_params);
+end
+% all calcs use conductivity
+img = convert_img_units(img, 'conductivity');
+
+pp= fwd_model_parameters( fwd_model, 'skip_VOLUME' );
+pp = set_gnd_node(fwd_model, pp);
+s_mat= calc_system_mat( img );
+
+if isfield(fwd_model,'model_reduction')
+   [s_mat.E, main_idx, pp] = mdl_reduction(s_mat.E, ...
+           img.fwd_model.model_reduction, img, pp );
+else
+   pp.mr_mapper = 1:size(s_mat.E,1);
+end
+
+% Normally EIT uses current stimulation. In this case there is
+%  only a ground node, and this is the only dirichlet_nodes value.
+%  In that case length(dirichlet_nodes) is 1 and the loop runs once
+% If voltage stimulation is done, then we need to loop on the
+%  matrix to calculate faster. 
+[dirichlet_nodes, dirichlet_values, neumann_nodes, has_gnd_node]= ...
+         find_dirichlet_nodes( fwd_model, pp );
+
+v= full(horzcat(dirichlet_values{:})); % Pre fill in matrix
+for i=1:length(dirichlet_nodes)
+   idx= 1:size(s_mat.E,1);
+   idx( dirichlet_nodes{i} ) = [];
+   % If all dirichlet patterns are the same, then calc in one go
+   if length(dirichlet_nodes) == 1; rhs = 1:size(pp.QQ,2);
+   else                           ; rhs = i; end
+   v(idx,rhs)= left_divide( s_mat.E(idx,idx), ...
+                     neumann_nodes{i}(idx,:) - ...
+                     s_mat.E(idx,:)*dirichlet_values{i},fwd_model);
+end
+
+% If model has a ground node, check if current flowing in this node
+if has_gnd_node
+   Ignd = s_mat.E(dirichlet_nodes{1},:)*v;
+   Irel = Ignd./sum(abs(pp.QQ)); % relative 
+   if max(abs(Irel))>1e-6
+      eidors_msg('%4.5f%% of current is flowing through ground node. Check stimulation pattern', max(abs(Irel))*100,1);
+   end
+end
+
+%% Calculate the magnetic field on magnetometers (TODO)
+
+img = compute_gamma_matrices(img);
+
+u = v(1:size(img.fwd_model.nodes,1),:);
+
+Bx = img.Gamma1*u;
+By = img.Gamma2*u;
+Bz = img.Gamma3*u;
+
+% calc voltage on electrodes
+% idx = find(any(pp.N2E));
+% v_els= pp.N2E(:,idx) * v(idx,:);
+
+%% Create a data structure to return
+
+% create a data structure to return
+data.type = 'data';
+data.name= 'solved by fwd_solve_1st_order_mdeit';
+data.time= NaN; % unknown
+
+data.meas = [Bx(:);By(:);Bz(:)];
+
+try; if img.fwd_solve.get_all_meas == 1
+   outmap = pp.mr_mapper(1:pp.n_node);
+   data.volt(outmap,:) = v(1:pp.n_node,:); % but not on CEM nodes
+end; end
+try; if img.fwd_solve.get_all_nodes== 1
+   data.volt(pp.mr_mapper,:) = v;                % all, including CEM nodes
+end; end
+try; if img.fwd_solve.get_elec_curr== 1
+%  data.elec_curr = pp.N2E * s_mat.E * v;
+   idx = find(any(pp.N2E));
+   data.elec_curr = pp.N2E(:,idx) * s_mat.E(idx,:) * v;
+end; end
+
+
+% has_gnd_node = flag if the model has a gnd_node => can warn if current flows
+function [dirichlet_nodes, dirichlet_values, neumann_nodes, has_gnd_node]= ...
+            find_dirichlet_nodes( fwd_model, pp );
+   fnanQQ = isnan(pp.QQ);
+   lstims = size(pp.QQ,2);
+   % Can't use any(...) because if does implicit all
+   if any(any(fnanQQ))
+      has_gnd_node = 0; % no ground node is specified
+      % Are all dirichlet_nodes the same
+
+      % Don't use all on sparse, it will make them full
+      % Check if all rows are the same
+      if ~any(any(fnanQQ(:,1)*ones(1,lstims) - fnanQQ,2))
+         dirichlet_nodes{1} = find(fnanQQ(:,1));
+         dirichlet_values{1} = sparse(size(pp.N2E,2), size(fnanQQ,2));
+         dirichlet_values{1}(fnanQQ) = pp.VV(fnanQQ);
+         neumann_nodes{1} = pp.QQ;
+         neumann_nodes{1}(fnanQQ) = 0;
+      else % one at a time
+         for i=1:size(fnanQQ,2)
+            fnanQQi= fnanQQ(:,i);
+            if any(fnanQQi)
+               dirichlet_nodes{i} = find(fnanQQi);
+               dirichlet_values{i} = sparse(size(pp.N2E,2), 1);
+               dirichlet_values{i}(fnanQQi) = pp.VV(fnanQQi,i);
+               neumann_nodes{i} = pp.QQ(:,i);
+               neumann_nodes{i}(fnanQQi) = 0;
+            elseif isfield(pp,'gnd_node')
+               dirichlet_nodes{i} = pp.gnd_node;
+               dirichlet_values{i} = sparse(size(pp.N2E,2), 1);
+               neumann_nodes{1}   = pp.QQ(:,i);
+               has_gnd_node= 1;
+            else
+               error('no required ground node on model');
+            end
+         end
+      end
+   elseif isfield(pp,'gnd_node')
+      dirichlet_nodes{1} = pp.gnd_node;
+      dirichlet_values{1} = sparse(size(pp.N2E,2), size(fnanQQ,2));
+      neumann_nodes{1}   = pp.QQ;
+      has_gnd_node= 1;
+   else
+      error('no required ground node on model');
+   end
+
+function pp = set_gnd_node(fwd_model, pp);
+   if isfield(fwd_model,'gnd_node');
+      pp.gnd_node = fwd_model.gnd_node;
+   else
+      % try to find one in the model center
+      ctr =  mean(fwd_model.nodes,1);
+      d2  =  sum(bsxfun(@minus,fwd_model.nodes,ctr).^2,2);
+      [~,pp.gnd_node] = min(d2);
+      eidors_msg('Warning: no ground node found: choosing node %d',pp.gnd_node(1),1);
+   end
+
+function [E, m_idx, pp] = mdl_reduction(E, mr, img, pp);
+   % if mr is a string we assume it's a function name
+   if isa(mr,'function_handle') || ischar(mr)
+      mr = feval(mr,img.fwd_model);
+   end
+   % mr is now a struct with fields: main_region, regions
+   m_idx = mr.main_region;
+   E = E(m_idx, m_idx);
+   for i=1:length(mr.regions)
+      invEi=   mr.regions(i).invE;
+% FIXME:!!! data_mapper has done the c2f. But we don't want that here.
+%  kludge is to reach into the fine model field. This is only ok because
+%  model_reduction is only valid if one parameter describes each field
+      field = mr.regions(i).field; 
+      field = find(img.fwd_model.coarse2fine(:,field));
+      field = field(1); % they're all the same - by def of model_reduction
+      sigma = img.elem_data(field);
+      E = E - sigma*invEi;
+   end
+
+   % Adjust the applied current and measurement matrices
+   pp.QQ = pp.QQ(m_idx,:);
+   pp.VV = pp.VV(m_idx,:);
+   pp.N2E= pp.N2E(:,m_idx);
+   pp.mr_mapper = cumsum(m_idx); %must be logical
+   pp.gnd_node = pp.mr_mapper(pp.gnd_node);
+   if pp.gnd_node==0
+      error('model_reduction removes ground node');
+   end
