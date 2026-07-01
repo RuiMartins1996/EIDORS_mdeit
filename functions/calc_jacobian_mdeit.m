@@ -1,14 +1,13 @@
-function  J = calc_jacobian_mdeit(img,select_sensor_axis)
+function  J = calc_jacobian_mdeit(img)
 
-if nargin < 2
-    recon_mode = 'mdeit3';
-else
-    recon_mode = 'mdeit1';
-end
+% Detect model dimension
+dim = size(img.fwd_model.nodes,2);
+
+recon_mode = check_recon_mode(img);
 
 switch recon_mode
     case 'mdeit1'
-        J = calc_jacobian_1axis(img,select_sensor_axis);
+        J = calc_jacobian_1axis(img);
 
     case 'mdeit3'
         [Jx,Jy,Jz] = calc_jacobian_3axis(img);
@@ -20,7 +19,7 @@ end
 % RIGHT NOW, calc_jacobian_1axis is using LDL and calc_jacobian_3axis is
 % using pcg. Add this as an option!!!!!!!!!!!!!!!!!!!!!
 
-function J = calc_jacobian_1axis(img,select_sensor_axis)
+function J = calc_jacobian_1axis(img)
 
 mu0 = img.fwd_model.mu0;
 
@@ -37,16 +36,7 @@ img = compute_gamma_matrices(img);
 R = img.fwd_model.R;
 G = img.fwd_model.G;
 
-switch select_sensor_axis
-    case 1
-        Gamma = img.Gamma1;
-    case 2
-        Gamma = img.Gamma2;
-    case 3
-        Gamma = img.Gamma3;
-    otherwise
-        error('here')
-end
+Gamma = img.Gamma;
 
 % Factorize lhs system matrix
 A_matrix = lhs_eit_full(img);
@@ -114,23 +104,13 @@ dCydp = ( -Rx_.*GzU + Rz_.*GxU );
 dCzdp = ( -Ry_.*GxU + Rx_.*GyU );
 
 % The g matrix does not depend on sigma.
-g = zeros(num_sensors,3,3);
+g = zeros(num_sensors, 3);
 for m = 1:numel(img.fwd_model.sensors)
-    g(m,:,:) = [...
-        img.fwd_model.sensors(m).axes.axis1;
-        img.fwd_model.sensors(m).axes.axis2;
-        img.fwd_model.sensors(m).axes.axis3];
+    g(m,:) = img.fwd_model.sensors(m).axes.axis;
 end
 
-% g: [num_sensors × 3 × 3]
-gx = reshape(g(:,select_sensor_axis,1), [num_sensors 1 1 ]);
-gy = reshape(g(:,select_sensor_axis,2), [num_sensors 1 1]);
-gz = reshape(g(:,select_sensor_axis,3), [num_sensors 1 1]);
+dfdp  = mu_factor * (g(:,1).*dCxdp + g(:,2).*dCydp  + g(:,3).*dCzdp);
 
-dfdp = mu_factor*(...
-    gx.*dCxdp +...
-    gy.*dCydp +...
-    gz.*dCzdp);
 
 dfd = dfdx + dfdp;   % size: [numStim × numSensors × numElems]
 
@@ -142,7 +122,7 @@ J = reshape(dfd, num_sensors*num_stim, n_elem);
 return
 end
 
-function [Jx,Jy,Jz] = calc_jacobian_3axis(img,A)
+function [Jx,Jy,Jz] = calc_jacobian_3axis(img)
 
 mu0 = img.fwd_model.mu0;
 n_nodes = size(img.fwd_model.nodes,1);
@@ -241,17 +221,17 @@ for select_sensor_axis = 1:3
     switch select_sensor_axis
         case 1
             % Expand lambda and R terms to 3D
-            GxL = reshape(Gx_times_lambda_X.', [num_sensors 1 n_elem]); 
+            GxL = reshape(Gx_times_lambda_X.', [num_sensors 1 n_elem]);
             GyL = reshape(Gy_times_lambda_X.', [num_sensors 1 n_elem]);
             GzL = reshape(Gz_times_lambda_X.', [num_sensors 1 n_elem]);
         case 2
             % Expand lambda and R terms to 3D
-            GxL = reshape(Gx_times_lambda_Y.', [num_sensors 1 n_elem]); 
+            GxL = reshape(Gx_times_lambda_Y.', [num_sensors 1 n_elem]);
             GyL = reshape(Gy_times_lambda_Y.', [num_sensors 1 n_elem]);
             GzL = reshape(Gz_times_lambda_Y.', [num_sensors 1 n_elem]);
         case 3
             % Expand lambda and R terms to 3D
-            GxL = reshape(Gx_times_lambda_Z.', [num_sensors 1 n_elem]); 
+            GxL = reshape(Gx_times_lambda_Z.', [num_sensors 1 n_elem]);
             GyL = reshape(Gy_times_lambda_Z.', [num_sensors 1 n_elem]);
             GzL = reshape(Gz_times_lambda_Z.', [num_sensors 1 n_elem]);
     end
@@ -298,52 +278,68 @@ end
 
 %% FUNCTIONS
 function F = factorise_symmetric(A)
-    F.kind = 'ldl';
-    try
-        [F.L,F.D,F.P] = ldl(A,'vector'); 
-        F.n = size(A,1);
-    catch
-        error('Couldnt do it')
-        % [F.L,F.U,F.pv,F.qv] = lu(A,'vector'); 
-        % F.kind='lu'; 
-        % F.n   = size(A,1);
-    end
+F.kind = 'ldl';
+try
+    [F.L,F.D,F.P] = ldl(A,'vector');
+    F.n = size(A,1);
+catch
+    error('Couldnt do it')
+    % [F.L,F.U,F.pv,F.qv] = lu(A,'vector');
+    % F.kind='lu';
+    % F.n   = size(A,1);
+end
 end
 
 function X = solve_fact_multiple_rhs(F, rhs)
 
-    switch F.kind
+switch F.kind
 
-        case 'ldl'
-            % Permute RHS (each column independently)
-            rp = rhs(F.P, :);
+    case 'ldl'
+        % Permute RHS (each column independently)
+        rp = rhs(F.P, :);
 
-            % LDL solves (all column-wise)
-            y  = F.L \ rp;
-            z  = F.D \ y;
-            w  = F.L' \ z;
+        % LDL solves (all column-wise)
+        y  = F.L \ rp;
+        z  = F.D \ y;
+        w  = F.L' \ z;
 
-            % Allocate full solution matrix
-            X = zeros(F.n, size(rhs,2));
+        % Allocate full solution matrix
+        X = zeros(F.n, size(rhs,2));
 
-            % Unpermute rows
-            X(F.P, :) = w;
+        % Unpermute rows
+        X(F.P, :) = w;
 
-        case 'lu'
-            % Row permutation of RHS
-            y = rhs(F.pv, :);
+    case 'lu'
+        % Row permutation of RHS
+        y = rhs(F.pv, :);
 
-            % Triangular solves
-            z = F.L \ y;
-            w = F.U \ z;
+        % Triangular solves
+        z = F.L \ y;
+        w = F.U \ z;
 
-            % Allocate solution
-            X = zeros(F.n, size(rhs,2));
+        % Allocate solution
+        X = zeros(F.n, size(rhs,2));
 
-            % Column permutation recovery
-            X(F.qv, :) = w;
+        % Column permutation recovery
+        X(F.qv, :) = w;
 
-        otherwise
-            error('Unknown factorisation kind.');
-    end
+    otherwise
+        error('Unknown factorisation kind.');
+end
+end
+
+
+function recon_mode = check_recon_mode(img)
+
+% Check which reconstruction mode is being used based on the sensor axes fields
+if isfield(img.fwd_model.sensors(1).axes, 'axis')
+    recon_mode = 'mdeit1';
+elseif isfield(img.fwd_model.sensors(1).axes, 'axis1') && ...
+        isfield(img.fwd_model.sensors(1).axes, 'axis2') && ...
+        isfield(img.fwd_model.sensors(1).axes, 'axis3')
+    recon_mode = 'mdeit3';
+else
+    error('Unknown sensor axes configuration. Please check the sensor axes fields.');
+end
+
 end

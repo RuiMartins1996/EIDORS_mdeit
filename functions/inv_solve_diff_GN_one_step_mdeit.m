@@ -41,8 +41,9 @@ function img= inv_solve_diff_GN_one_step_mdeit( inv_model, data1, data2)
 % dv = calc_difference_data( data1, data2, inv_model.fwd_model);
 
 dm = calc_difference_data_mdeit( data1, data2, inv_model.fwd_model);
+inv_model.hyperparameter.data = dm;
 
-sol = eidors_cache(@get_RM, inv_model,'inv_solve_diff_GN_one_step' ) * dm;
+sol = solve_normal_equations(inv_model, dm);
 
 img = data_mapper(calc_jacobian_bkgnd( inv_model ));
 img.name= 'solved by inv_solve_diff_GN_one_step';
@@ -50,8 +51,8 @@ img.elem_data = sol;
 img.fwd_model= inv_model.fwd_model;
 img = data_mapper(img,1);
 
-img = scale_to_fit_data(img, inv_model, data1, data2);
-
+% img = scale_to_fit_data(img, inv_model, data1, data2);
+end
 
 function RM = get_RM( inv_model )
 img_bkgnd= calc_jacobian_bkgnd( inv_model );
@@ -59,14 +60,85 @@ J = calc_jacobian_mdeit( img_bkgnd);
 
 RtR = calc_RtR_prior( inv_model );
 % W   = calc_meas_icov( inv_model );
-hp  = calc_hyperparameter( inv_model );
+hp  = calc_hyperparameter_mdeit( inv_model );
 
 % left_divide now has handling to force symmetric methods when matrices
 % are symmetric up to floating point error.
 
 % RM  = left_divide((J'*W*J +  hp^2*RtR),J'*W);
 RM  = left_divide((J'*J +  hp^2*RtR),J');
+end
 
+function sol = solve_normal_equations(inv_model, dm)
+do_pcg = false;
+tol = 1e-4;
+maxit = size(dm, 1);
+
+if isfield(inv_model, 'inv_solve_core')
+   if isfield(inv_model.inv_solve_core, 'do_pcg')
+      do_pcg = inv_model.inv_solve_core.do_pcg;
+   end
+   if isfield(inv_model.inv_solve_core, 'tol')
+      tol = inv_model.inv_solve_core.tol;
+   end
+   if isfield(inv_model.inv_solve_core, 'maxit')
+      maxit = inv_model.inv_solve_core.maxit;
+   end
+end
+
+if do_pcg
+   % Emit a warning that pcg is being used
+   eidors_msg('inv_solve_diff_GN_one_step: Using PCG solver',2);
+
+   img_bkgnd = calc_jacobian_bkgnd(inv_model);
+   J = calc_jacobian_mdeit(img_bkgnd);
+   RtR = calc_RtR_prior(inv_model);
+   hp = calc_hyperparameter_mdeit(inv_model);
+   rhs = J' * dm;
+   sol = solve_normal_equations_pcg(J, RtR, hp, rhs, tol, maxit);
+else
+   % Emit a warning that left_divide is being used
+   eidors_msg('inv_solve_diff_GN_one_step: Using left_divide solver',2);
+   sol = eidors_cache(@get_RM, inv_model,'inv_solve_diff_GN_one_step' ) * dm;
+end
+end
+
+function sol = solve_normal_equations_pcg(J, RtR, hp, rhs, tol, maxit)
+n_unknowns = size(rhs, 1);
+n_rhs = size(rhs, 2);
+sol = zeros(n_unknowns, n_rhs);
+
+% Compute J'*J + hp^2*RtR once 
+A = J' * J + hp^2 * RtR;
+
+apply_normal_eq = @(x) A * x;
+
+for rhs_idx = 1:n_rhs
+   [sol(:, rhs_idx), flag, relres, iter] = pcg( ...
+      apply_normal_eq, rhs(:, rhs_idx), tol, maxit, [], [], zeros(n_unknowns, 1));
+
+   switch flag
+      case 0
+         % PCG converged successfully
+      case 1
+         % PCG did not converge within the maximum number of iterations
+         warning(sprintf(['inv_solve_diff_GN_one_step_mdeit:pcg exceeded maximum iterations without converging' ...
+                        '(relres=%g, iter=%d)'],relres, iter));
+      case 2
+         % The preconditioner matrix M or M = M1*M2 is ill conditioned.
+         warning(sprintf(['inv_solve_diff_GN_one_step_mdeit:pcg preconditioner is ill conditioned' ...
+                        '(relres=%g, iter=%d)'],relres, iter));
+      case 3
+         % PCG stagnated
+         warning(sprintf(['inv_solve_diff_GN_one_step_mdeit:pcg stagnated' ...
+                        '(relres=%g, iter=%d)'],relres, iter));
+      case 4
+         % One of the scalar quantities calculated during PCG became too small or too large to continue computing.
+         error(sprintf(['inv_solve_diff_GN_one_step_mdeit:pcg scalar quantity too small or too large' ...
+                        '(relres=%g, iter=%d)'],relres, iter));
+   end
+end
+end
 
 function [img, step_size] = scale_to_fit_data(img, inv_model, data1, data2)
    % find the step size to multiply sol by to best fit data
@@ -74,7 +146,7 @@ function [img, step_size] = scale_to_fit_data(img, inv_model, data1, data2)
    do_step   = false;
    % If calc_step_size, ignore specified step_size
    try do_step = inv_model.inv_solve_diff_GN_one_step.calc_step_size; end
-   
+
    if do_step
       eidors_msg('inv_solve_diff_GN_one_step: Calculating optimal step size to fit data',2);
       % options for fminbnd
@@ -99,8 +171,9 @@ function [img, step_size] = scale_to_fit_data(img, inv_model, data1, data2)
    end
    img.elem_data = img.elem_data * step_size;
    img.info.step_size = step_size;
+end
 
 function out = to_optimize(img, inv_model, data1, data2, x)
    img.elem_data = img.elem_data*x;
    out = calc_solution_error(img, inv_model, data1, data2);
-
+end

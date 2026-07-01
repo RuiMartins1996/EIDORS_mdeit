@@ -1,5 +1,53 @@
 function img = compute_gamma_matrices(img)
 
+% Check which reconstruction mode is being used based on the sensor axes fields
+if isfield(img.fwd_model.sensors(1).axes, 'axis')
+    recon_mode = 'mdeit1';
+elseif isfield(img.fwd_model.sensors(1).axes, 'axis1') && ...
+       isfield(img.fwd_model.sensors(1).axes, 'axis2') && ...
+       isfield(img.fwd_model.sensors(1).axes, 'axis3')
+    recon_mode = 'mdeit3';
+else
+    error('Unknown sensor axes configuration. Please check the sensor axes fields.');
+end
+
+switch recon_mode
+    case 'mdeit1'
+        img = compute_gamma_matrices_mdeit1(img);
+    case 'mdeit3'
+        img = compute_gamma_matrices_mdeit3(img);
+    otherwise
+        error('Unknown reconstruction mode: %s', recon_mode);
+end
+
+end
+
+function img = compute_gamma_matrices_mdeit1(img)
+    mu_factor = img.fwd_model.mu0/(4*pi);
+
+    num_sensors = numel(img.fwd_model.sensors);
+
+    % Convenience handles
+    R = img.fwd_model.R;
+    G = img.fwd_model.G;
+
+    Sigma = spdiags(img.elem_data(:), 0, length(img.elem_data), length(img.elem_data));
+
+    g = zeros(num_sensors, 3);
+    for m = 1:numel(img.fwd_model.sensors)
+        g(m,:) = img.fwd_model.sensors(m).axes.axis;
+    end
+
+    Cx = ( -R.Rz * Sigma * G.Gy +  R.Ry * Sigma * G.Gz );
+    Cy = ( -R.Rx * Sigma * G.Gz +  R.Rz * Sigma * G.Gx );
+    Cz = ( -R.Ry * Sigma * G.Gx +  R.Rx * Sigma * G.Gy );
+
+    Gamma = mu_factor * (g(:,1).*Cx + g(:,2).*Cy + g(:,3).*Cz);
+
+    img.Gamma = Gamma;
+end
+
+function img = compute_gamma_matrices_mdeit3(img)
 mu_factor = img.fwd_model.mu0/(4*pi);
 
 num_sensors = numel(img.fwd_model.sensors);

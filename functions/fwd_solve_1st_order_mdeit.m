@@ -3,6 +3,7 @@ function data =fwd_solve_1st_order_mdeit(img)
 % First order FEM forward solver
 % Input:
 %    img       = image struct
+%    select_sensor_axis = indices of sensor axes to use
 % Output:
 %    data = measurements struct
 % Options: (to return internal FEM information)
@@ -77,15 +78,35 @@ if has_gnd_node
    end
 end
 
-%% Calculate the magnetic field on magnetometers (TODO)
+%% Calculate the magnetic field on magnetometers 
 
 img = compute_gamma_matrices(img);
 
 u = v(1:size(img.fwd_model.nodes,1),:);
 
-Bx = img.Gamma1*u;
-By = img.Gamma2*u;
-Bz = img.Gamma3*u;
+% Check which reconstruction mode is being used based on the sensor axes fields
+if isfield(img.fwd_model.sensors(1).axes, 'axis')
+    recon_mode = 'mdeit1';
+elseif isfield(img.fwd_model.sensors(1).axes, 'axis1') && ...
+       isfield(img.fwd_model.sensors(1).axes, 'axis2') && ...
+       isfield(img.fwd_model.sensors(1).axes, 'axis3')
+    recon_mode = 'mdeit3';
+else
+    error('Unknown sensor axes configuration. Please check the sensor axes fields.');
+end
+
+switch recon_mode
+   case 'mdeit1'
+      B = img.Gamma*u; % Measurement in the sensor axis direction for every sensor for every stimulation pattern
+      B = B(:); % Flatten the matrix into a vector
+   case 'mdeit3'
+        Bx = img.Gamma1*u; % Measurement in axis1 direction for every sensor for every stimulation pattern
+        By = img.Gamma2*u;
+        Bz = img.Gamma3*u;
+        B = [Bx(:); By(:); Bz(:)];
+   otherwise
+        error('Unknown reconstruction mode: %s', recon_mode);
+end
 
 % calc voltage on electrodes
 % idx = find(any(pp.N2E));
@@ -98,7 +119,7 @@ data.type = 'data';
 data.name= 'solved by fwd_solve_1st_order_mdeit';
 data.time= NaN; % unknown
 
-data.meas = [Bx(:);By(:);Bz(:)];
+data.meas = B;
 
 try; if img.fwd_solve.get_all_meas == 1
    outmap = pp.mr_mapper(1:pp.n_node);
@@ -148,7 +169,7 @@ function [dirichlet_nodes, dirichlet_values, neumann_nodes, has_gnd_node]= ...
                has_gnd_node= 1;
             else
                error('no required ground node on model');
-            end
+            end 
          end
       end
    elseif isfield(pp,'gnd_node')
