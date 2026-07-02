@@ -69,9 +69,9 @@ fmdl = compute_geometry_matrices(fmdl,mu0);
 
 imdl = mk_common_model('a2c2',8); % Will replace most fields
 imdl.fwd_model = fmdl;
-imdl.fwd_model.stimulation = fmdl.stimulation;
 imdl.hyperparameter.value = 0.001;
-imdl.RtR_prior = @prior_tikhonov;
+imdl.RtR_prior = @prior_tikhonov;% the default prior is prior_laplace
+
 
 img1 = mk_image(imdl);
 
@@ -81,24 +81,40 @@ select_fcn = @(x,y,z) (x-0).^2 + (y-0).^2 + (z-1.5).^2 < 0.3^2;
 memb_frac = elem_select( img1.fwd_model, select_fcn);
 img2 = mk_image(img1, 1 + memb_frac );
 
-% the default prior is prior_laplace
 
-% Simulate Voltages and plot them
+% Compute forward solutions
 datah_mdeit = fwd_solve_1st_order_mdeit(img1);
 datai_mdeit = fwd_solve_1st_order_mdeit(img2);
 
 datah_eit = fwd_solve(img1);
 datai_eit = fwd_solve(img2);
 
-imgr_eit = inv_solve(imdl,datah_eit,datai_eit);
+% Pollute data with a small amount of gaussian white noise
+noise_strength = 0.0001;
+noise_level_mdeit = max([datah_mdeit.meas;datai_mdeit.meas])*noise_strength;
+datah_mdeit.meas = datah_mdeit.meas + noise_level_mdeit * randn(size(datah_mdeit.meas));
+datai_mdeit.meas = datai_mdeit.meas + noise_level_mdeit * randn(size(datai_mdeit.meas));
 
-imdl.hyperparameter.value = 0.01;
+noise_level_eit = max([datah_eit.meas;datai_eit.meas])*noise_strength;
+datah_eit.meas = datah_eit.meas + noise_level_eit * randn(size(datah_eit.meas));
+datai_eit.meas = datai_eit.meas + noise_level_eit * randn(size(datai_eit.meas));
+
+% Use GCV to find the optimal hyperparameter
+imdl.hyperparameter.func = @gcv;
+% Use pcg solve
+imdl.inv_solve_core.do_pcg = true;
+
+imgr_eit = inv_solve(imdl,datah_eit,datai_eit);
 imgr_mdeit = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit, datai_mdeit);
 
+figure
+plot(1,1)
 
 figure
 subplot(1,2,1)
 show_fem(imgr_eit)
 subplot(1,2,2)
 show_fem(imgr_mdeit)
+
+disp('Done');
 
