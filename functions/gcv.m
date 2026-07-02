@@ -32,12 +32,14 @@ else
     error('gcv: RtR_prior must be a function handle or string');
 end
 
+fprintf('Selecting hyperparameter with GCV ...\n');
+
 % Get background Jacobian
 img_bkgnd = calc_jacobian_bkgnd(imdl);
 J = calc_jacobian_mdeit(img_bkgnd);
 
 if ~isfield(imdl, 'hyperparameter') || ~isfield(imdl.hyperparameter, 'data')
-    error('gcv: Exact GCV requires imdl.hyperparameter.data to contain the data vector y');
+    error('gcv: Exact GCV requires imdl.hyperparameter.data to contain the data vector');
 end
 data = imdl.hyperparameter.data;
 
@@ -57,23 +59,30 @@ n_meas = size(J, 1);
 % Search over lambda from 1e-5 to 1e1 (lambda^2 will be used in the solver)
 
 % Use fminsearch to find the lambda that minimizes the GCV criterion
-opt = optimset('Display', 'iter', 'TolX', 1e-4);
-
-fprintf('Starting GCV optimization for hyperparameter selection...\n');
+opt = optimset('MaxIter',100, 'TolX', 1e-4);
 
 % Compute the gcv cost function on a lambda vector to visualize the GCV curve
-lambda_vec = logspace(-100*eps(1), 5, 100);
-gcv_scores = arrayfun(@(lambda) gcv_criterion(lambda, sigma, Uy), lambda_vec);
+% lambda_vec = logspace(log10(eps(1)), 5, 100);
+% gcv_scores = arrayfun(@(lambda) gcv_criterion(lambda, sigma, Uy), lambda_vec);
 
 % Visualize the GCV curve
-figure;
-semilogx(lambda_vec, gcv_scores, 'b-', 'LineWidth', 2);
-xlabel('Regularization Parameter \lambda');
-ylabel('GCV Score');
-title('GCV Curve for Hyperparameter Selection');
+% figure;
+% semilogx(lambda_vec, gcv_scores, 'b-', 'LineWidth', 2);
+% xlabel('Regularization Parameter \lambda');
+% ylabel('GCV Score');
+% title('GCV Curve for Hyperparameter Selection');
 
-lambda_opt = fminsearch(@(lambda) gcv_criterion(lambda, sigma, Uy), ...
-                        1e-1, opt);
+% Use fminsearch to find the optimal lambda, and check if it terminates successfully
+[lambda_opt, ~, exitflag] = fminsearch(@(lambda) gcv_criterion(lambda, sigma, Uy), 1.0, opt);
+
+switch exitflag
+    case 1
+        fprintf('GCV optimization converged successfully.\n');
+    case 0
+        warning('gcv: fminsearch reached maximum iterations without convergence');
+    case -1
+        warning('gcv: fminsearch was terminated by the output function');
+end
 
 % Return optimal hyperparameter (hp^2 = n_meas*lambda_opt)
 hp = sqrt(n_meas*lambda_opt);

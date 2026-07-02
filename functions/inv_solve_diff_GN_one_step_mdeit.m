@@ -40,7 +40,7 @@ function img= inv_solve_diff_GN_one_step_mdeit( inv_model, data1, data2)
 
 % dv = calc_difference_data( data1, data2, inv_model.fwd_model);
 
-dm = calc_difference_data_mdeit( data1, data2, inv_model.fwd_model);
+dm = calc_difference_data_mdeit(data1, data2, inv_model.fwd_model);
 inv_model.hyperparameter.data = dm;
 
 sol = solve_normal_equations(inv_model, dm);
@@ -59,6 +59,7 @@ img_bkgnd= calc_jacobian_bkgnd( inv_model );
 J = calc_jacobian_mdeit( img_bkgnd);
 
 RtR = calc_RtR_prior( inv_model );
+
 % W   = calc_meas_icov( inv_model );
 hp  = calc_hyperparameter_mdeit( inv_model );
 
