@@ -1,64 +1,53 @@
-function img = inv_solve_absolute_GN_mdeit(inv_model, data)
-
+function img = inv_solve_absolute_LM_mdeit(inv_model, data)
+    
     data = parse_data(data);
 
     [maxiter, tol, print_diagnostics] = parse_solver_parameters(inv_model);
+    
+    function [rk,J] = compute_residual_and_jacobian(x,data,img)
 
-    % First guess for the conductivity distribution
-    img = calc_jacobian_bkgnd(inv_model);
-
-    % Compute the Jacobian and residual for the first iteration
-    Jk = calc_jacobian_mdeit(img);
-    rk = calc_residual(img, data);
-
-    % Compute objective and gradient
-    obj = 0.5*(rk.'*rk);
-    gk = Jk.'*rk;
-
-    % Exit immediately if the initial guess is already good enough
-    if norm(gk) < tol
-        eidors_msg('inv_solve_absolute_GN_mdeit: Converged based on initial gradient norm', 2);
-        return;
-    end
-
-    for i = 1:maxiter
-        % Assemble the normal equations
-        A = Jk.'*Jk;
-        b = Jk.'*rk;
-
-        % Solve for the update step
-        dsigma = left_divide(A,b);
+        img.elem_data = x;
         
-        % Update the image
-        img.elem_data = img.elem_data + dsigma;
+        simulated_data = fwd_solve_1st_order_mdeit(img);
+        rk = calc_difference_data_mdeit(simulated_data,data, img.fwd_model);
 
-        % Update residual, the Jacobian, objective, and gradient for the next iteration
-        Jk = calc_jacobian_mdeit(img);
-        rk = calc_residual(img, data);
-        obj1 = 0.5*(rk.'*rk);
-        gk = Jk.'*rk;
-
-        if print_diagnostics
-            report_diagonostics(i, obj1, gk);
+        if nargout > 1   % Two output arguments
+            J = calc_jacobian_mdeit(img);
         end
-
-        % Check for convergence in the gradient
-        if norm(gk) < tol
-            eidors_msg('inv_solve_absolute_GN_mdeit: Converged based on gradient norm', 2);
-            break;
-        end
-        % Check for convergence in the objective function
-        if abs(obj1 - obj) < tol
-            eidors_msg('inv_solve_absolute_GN_mdeit: Converged based on objective function change', 2);
-            break;
-        end
-        obj = obj1;
     end
 
-    % If maximum iterations reached without convergence, issue a warning
-    if i == maxiter 
-        warning('inv_solve_absolute_GN_mdeit: Maximum iterations reached without convergence');
+    function [r, J] = fun(x)
+        if nargout > 1
+            [r,J] = compute_residual_and_jacobian(x,data,img);
+        else
+            r = compute_residual_and_jacobian(x,data,img);
+        end
     end
+    
+    img = calc_jacobian_bkgnd(inv_model);
+    x0 = img.elem_data;
+
+    if print_diagnostics
+        opts = optimoptions("lsqnonlin",...
+            'Algorithm','levenberg-marquardt',...
+            'SpecifyObjectiveGradient',true,...
+            'Display','iter-detailed',...
+            'StepTolerance',tol,...
+            'MaxIterations',maxiter,...
+            'UseParallel',true);
+    else
+        opts = optimoptions("lsqnonlin",...
+            'Algorithm','levenberg-marquardt',...
+            'SpecifyObjectiveGradient',true,...
+            'Display','iter-detailed',...
+            'StepTolerance',tol,...
+            'MaxIterations',maxiter,...
+            'UseParallel',true);
+    end
+
+    [x,~] = lsqnonlin(@fun,x0,[],[],[],[],[],[],[],opts);
+
+    img.elem_data = x;
 
 end
 
@@ -110,15 +99,3 @@ function [maxiter, tol, print_diagnostics] = parse_solver_parameters(inv_model)
     end
 end
 
-function residual = calc_residual(img, m)
-    
-    % Simulate the data based on the current image estimate
-    simulated_data = fwd_solve_1st_order_mdeit(img);
-    
-    % Calculate the residual [s.Bx(:);s.By(:);s.Bz(:)]-data(:);
-    residual = calc_difference_data_mdeit(simulated_data,m, img.fwd_model);
-end
-
-function report_diagonostics(iteration, obj, gk)
-    fprintf('Iteration %d: Objective = %.6f, Gradient Norm = %.6f\n', iteration, obj, norm(gk));
-end

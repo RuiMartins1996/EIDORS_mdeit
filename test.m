@@ -13,40 +13,29 @@ addpath(genpath(fullfile(script_folder,'functions')));
 
 eidors_folder = setup_eidors(script_folder);
 
-%% Define the characteristic scales in SI units
-
-z0 = 0.0058; %(Ohm m^2) is the contact impedance from the CEM article 58 Ohm cm^2
-l0 = 40e-3; %(m) the tank radius
-I0 = 2.4e-3;%(A) the magnitude of the injected current
-
-% The derived characteristic units
-V0 = z0*I0/(l0^2); %(V)
-sigma0 = l0/z0; %(S/m)
-J0 = I0/(l0^2);
-
 %% Create forward model for reconstruction and for forward simulation
 
-background_conductivity = 3.28e-1/sigma0;
+background_conductivity = 1.0;
 
-height = 70e-3/l0;
-radius = 40e-3/l0;
-maxsz_recon = 5e-2/l0;
-maxsz_fwd = 10e-3/l0;
+height = 3;
+radius = 1.0;
+maxsz_recon = 0.3;
+maxsz_fwd = 0.2;
 
 num_electrodes_ring = 8;
 num_rings = 4;
 ring_vert_pos = height/(num_rings+1):height/(num_rings+1):height-height/(num_rings+1);
-electrode_radius = 8e-3/l0;
+electrode_radius = 0.1;
 
-z_contact_impedance = 0.0058/z0;
-current_amplitude = 2.4e-3/I0;
+z_contact_impedance = 1.0;
+current_amplitude = 1.0;
 
 elec_pos = [num_electrodes_ring,ring_vert_pos];
 elec_shape = [electrode_radius, electrode_radius, maxsz_recon ]; %square electrodes
 
-anomaly_conductivity = 1e-12/sigma0; % (0 according to Kai's thesis, but check notes)
-anomaly_position = [20,0,35]*1e-3/l0; %  [0,0,35]*1e-3/l0; % pg 172
-anomaly_radius = 25/2*1e-3/l0; % 25mm of diameter, pg 172
+anomaly_conductivity = 0.1; % (0 according to Kai's thesis, but check notes)
+anomaly_position = [radius/2,0,height/2]; %  [0,0,35]*1e-3/l0; % pg 172
+anomaly_radius = 0.25; % 25mm of diameter, pg 172
 
 % Create forward models
 fmdl_recon = ng_mk_cyl_models([height,radius,maxsz_recon],elec_pos,elec_shape);
@@ -69,7 +58,7 @@ end
 
 num_sensors_ring = num_electrodes_ring;
 sensor_positions = zeros(numel(fmdl_recon.electrode),3);
-sensor_distance = 70e-3/l0-radius;
+sensor_distance = radius/5;
 
 cyl_center = [0,0,height/2];
 
@@ -140,21 +129,12 @@ imdl.RtR_prior = @prior_tikhonov;% the default prior is prior_laplace
 
 % Use GCV to find the optimal hyperparameter
 imdl.inv_solve_core.print_diagnostics = true;
-imgr_mdeit_gcv = inv_solve_absolute_GN_mdeit(imdl, datai_mdeit);
+imgr_mdeit_gcv = inv_solve_absolute_LM_mdeit(imdl, datai_mdeit);
 
 
 %% Plots 
 figure
 
-subplot(1,3,1)
-title('Value')
-show_fem(imgr_mdeit_value)
-plot_sensors(imgr_mdeit_value)
-subplot(1,3,2)
-title('L-curve')
-show_fem(imgr_mdeit_l_curve)
-plot_sensors(imgr_mdeit_l_curve)
-subplot(1,3,3)
 title('GCV')
 show_fem(imgr_mdeit_gcv)
 plot_sensors(imgr_mdeit_gcv)
