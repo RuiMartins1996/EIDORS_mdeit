@@ -1,4 +1,4 @@
-function data =fwd_solve_1st_order_mdeit(img)
+function data = fwd_solve_1st_order_mdeit(img)
 % FWD_SOLVE_1ST_ORDER: data= fwd_solve_1st_order( img)
 % First order FEM forward solver
 % Input:

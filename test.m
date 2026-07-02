@@ -139,19 +139,9 @@ imdl.RtR_prior = @prior_tikhonov;% the default prior is prior_laplace
 %% MDEIT solve (with multiple ways to choose ridge parameter)
 
 % Use GCV to find the optimal hyperparameter
-imdl.hyperparameter.func = @gcv;
-imgr_mdeit_gcv = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit, datai_mdeit);
+imdl.inv_solve_core.print_diagnostics = true;
+imgr_mdeit_gcv = inv_solve_absolute_GN_mdeit(imdl, datai_mdeit);
 
-% Use L-curve to find the optimal hyperparameter
-imdl.hyperparameter.func = @l_curve;
-imgr_mdeit_l_curve = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit, datai_mdeit);
-
-% Set hyperparameter value
-if isfield(imdl.hyperparameter,'func')
-    imdl.hyperparameter = rmfield(imdl.hyperparameter,'func');
-end
-imdl.hyperparameter.value = 0.005;
-imgr_mdeit_value = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit, datai_mdeit);
 
 %% Plots 
 figure
