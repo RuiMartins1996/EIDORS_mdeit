@@ -1,0 +1,13 @@
+Important:
+- Add an absolute GN solver
+- Add a check for the Parallel Computing Toolbox
+- Add a TSVD solver
+- Add mesh convergence utility
+- Add anomaly insertion (in the mesh, not just editing the elements) utility
+
+Later:
+- Higher order forward solver
+- Sensor position optimization utility
+
+Maybe:
+- Interface with EIDORS inv_solve() by detecting that the model is mdeit automatically. At least, do an inv_solve_mdeit that handles multiple solvers.

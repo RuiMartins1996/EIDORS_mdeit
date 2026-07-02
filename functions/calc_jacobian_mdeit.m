@@ -1,7 +1,7 @@
 function  J = calc_jacobian_mdeit(img)
 
 % Detect model dimension
-dim = size(img.fwd_model.nodes,2);
+%dim = size(img.fwd_model.nodes,2);
 
 recon_mode = check_recon_mode(img);
 
@@ -125,7 +125,7 @@ end
 function [Jx,Jy,Jz] = calc_jacobian_3axis(img)
 
 mu0 = img.fwd_model.mu0;
-n_nodes = size(img.fwd_model.nodes,1);
+%n_nodes = size(img.fwd_model.nodes,1);
 n_elem = size(img.fwd_model.elems,1);
 
 num_stim = numel(img.fwd_model.stimulation);
@@ -157,7 +157,7 @@ Ac = A_matrix(1:size(img.fwd_model.nodes,1),1:size(img.fwd_model.nodes,1));
 Ae = A_matrix(1:size(img.fwd_model.nodes,1),size(img.fwd_model.nodes,1)+1:end);
 Aet = A_matrix(size(img.fwd_model.nodes,1)+1:end,1:size(img.fwd_model.nodes,1));
 Ad = A_matrix(size(img.fwd_model.nodes,1)+1:end,size(img.fwd_model.nodes,1)+1:end);
-Ad1 = sparse([1:n_elec],[1:n_elec],1./diag(Ad),n_elec,n_elec);
+Ad1 = sparse(1:n_elec,1:n_elec,1./diag(Ad),n_elec,n_elec);
 
 A_matrix = Ac-Ae*Ad1*Aet;
 
