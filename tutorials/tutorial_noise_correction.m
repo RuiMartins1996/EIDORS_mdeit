@@ -9,7 +9,7 @@ script_folder = fileparts(fullpath);
 cd(script_folder);
 
 % Have to add the functions path manually so prepare_workspace runs
-addpath(genpath(fullfile(script_folder,'functions')));
+addpath(genpath(fullfile(fileparts(script_folder),'functions')));
 
 eidors_folder = setup_eidors(script_folder);
 

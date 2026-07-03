@@ -4,6 +4,9 @@ Important:
 - Add anomaly insertion (in the mesh, not just editing the elements) utility
 - Make a tutorial for different solvers.
 
+Corrections:
+- noise_correction should not take as input imgh, imgi. Rather, it should take measurement noise sample as matrix. 
+
 Later:
 - Higher order forward solver
 - Sensor position optimization utility
