@@ -25,7 +25,7 @@ maxsz_fwd = 0.2;
 num_electrodes_ring = 8;
 num_rings = 4;
 ring_vert_pos = height/(num_rings+1):height/(num_rings+1):height-height/(num_rings+1);
-electrode_radius = 0.1;
+electrode_radius = 0.3;
 
 z_contact_impedance = 1.0;
 current_amplitude = 1.0;
@@ -129,14 +129,16 @@ imdl.RtR_prior = @prior_tikhonov;% the default prior is prior_laplace
 
 % Use GCV to find the optimal hyperparameter
 imdl.inv_solve_core.print_diagnostics = true;
-imgr_mdeit_gcv = inv_solve_absolute_LM_mdeit(imdl, datai_mdeit);
+
+imdl.hyperparameter.func = @tsvd;
+imgr_mdeit_tsvd = inv_solve_diff_TSVD(imdl, datah_mdeit,datai_mdeit);
 
 
 %% Plots 
 figure
 
 title('GCV')
-show_fem(imgr_mdeit_gcv)
-plot_sensors(imgr_mdeit_gcv)
+show_fem(imgr_mdeit_tsvd)
+plot_sensors(imgr_mdeit_tsvd)
 
 disp('Done');

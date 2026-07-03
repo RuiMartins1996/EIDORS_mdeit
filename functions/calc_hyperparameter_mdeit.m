@@ -21,16 +21,16 @@ if isfield( inv_model.hyperparameter, 'func')
    
    % Validate that func is either 'gcv' or 'lcurve'
    if ischar(func_name)
-      if ~ismember(func_name, {'gcv', 'l_curve'})
-         error(['calc_hyperparameter_mdeit: func must be either ''gcv'' or ''l_curve'', ' ...
+      if ~ismember(func_name, {'gcv', 'l_curve','tsvd'})
+         error(['calc_hyperparameter_mdeit: func must be either ''gcv'' or ''l_curve'' or ''tsvd'', ' ...
                 'but got ''%s'''], func_name);
       end
       inv_model.hyperparameter.func = str2func(func_name);
    else
       % If it's already a function handle, check its name
       func_str = func2str(inv_model.hyperparameter.func);
-      if ~ismember(func_str, {'gcv', 'l_curve'})
-         error(['calc_hyperparameter_mdeit: func must be either ''gcv'' or ''l_curve'', ' ...
+      if ~ismember(func_str, {'gcv', 'l_curve','tsvd'})
+         error(['calc_hyperparameter_mdeit: func must be either ''gcv'' or ''l_curve'' or ''tsvd'', ' ...
                 'but got ''%s'''], func_str);
       end
    end

@@ -144,12 +144,17 @@ figure
 subplot(1,3,1);
 show_fem(imgr_mdeit_value)
 plot_sensors(imgr_mdeit_value)
+title('Value')
+
 subplot(1,3,2);
 show_fem(imgr_mdeit_l_curve)
 plot_sensors(imgr_mdeit_l_curve)
+title('L-curve')
+
 subplot(1,3,3);
 show_fem(imgr_mdeit_gcv)
 plot_sensors(imgr_mdeit_gcv)
+title('GCV')
 
 disp('Done');
 
