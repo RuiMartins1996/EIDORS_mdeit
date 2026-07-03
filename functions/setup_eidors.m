@@ -5,6 +5,12 @@ if nargin < 1 || ~isfolder(start_folder)
     error('start_folder must be a valid directory.');
 end
 
+% Require the Parallel Computing Toolbox before continuing
+if ~has_parallel_computing_toolbox()
+    error(['Parallel Computing Toolbox is required to run this project. ' ...
+        'Please install and license it before continuing.']);
+end
+
 % Search parent directories for an EIDORS directory 
 eidors_folder = find_eidors_folder(start_folder);
 
@@ -28,8 +34,30 @@ end
 
 end
 
+function tf = has_parallel_computing_toolbox()
+% Detect whether MATLAB has access to the Parallel Computing Toolbox.
 
-%% ------------------------------------------------------------------------
+tf = false;
+
+if exist('license', 'builtin') || exist('license', 'file')
+    try
+        tf = license('test', 'Distrib_Computing_Toolbox');
+    catch
+        tf = false;
+    end
+end
+
+if ~tf && (exist('ver', 'builtin') || exist('ver', 'file'))
+    try
+        installed_products = ver;
+        tf = any(strcmpi({installed_products.Name}, 'Parallel Computing Toolbox'));
+    catch
+        tf = false;
+    end
+end
+
+end
+
 function eidors_folder = find_eidors_folder(start_folder)
 % helper: searches upward for a folder containing "eidors" in its name
 
