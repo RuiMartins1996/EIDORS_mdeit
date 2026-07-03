@@ -1,7 +1,5 @@
 Important:
 - Add an absolute LM solver (Done, but it's extremely slow, probably because of line search. Program lm solver myself, without line search!)
-
-- Add a check for the Parallel Computing Toolbox
 - Add mesh convergence utility
 - Add anomaly insertion (in the mesh, not just editing the elements) utility
 - Make a tutorial for different solvers.
