@@ -22,31 +22,43 @@ inv_model.hyperparameter.data = dm;
 
 img = data_mapper(calc_jacobian_bkgnd(inv_model));
 img.name = 'solved by inv_solve_diff_TSVD';
+
 img.elem_data = solve_tsvd(inv_model, dm);
+
 img.fwd_model = inv_model.fwd_model;
 img = data_mapper(img, 1);
 
 end
 
 function sol = solve_tsvd(inv_model, dm)
-	RM = eidors_cache(@get_RM, {inv_model}, 'inv_solve_diff_TSVD');
+    % Compute background jacobian
+    img_bkgnd = calc_jacobian_bkgnd(inv_model);
+    J= calc_jacobian(img_bkgnd);
+
+    hp = inv_model.hyperparameter.value;
+    
+    copt.fstr = 'calc_TSVD_RM';
+    RM = eidors_cache(@calc_RM,{J, hp}, copt);
+
 	sol = RM * dm;
 end
 
-function RM = get_RM(inv_model)
 
-    img_bkgnd = calc_jacobian_bkgnd(inv_model);
-    J = calc_jacobian_mdeit(img_bkgnd);
-    
+function RM = calc_RM(J, hp)
 
-    k = inv_model.hyperparameter.value;
+copt.cache_obj = J;
+copt.fstr = 'svd';
 
-    [U,S,V] = svd(J, 'econ');
+[U,S,V] = eidors_cache(@svd,{J, 'econ'},copt);
 
-    Uk = U(:,1:k);  
-    Vk = V(:,1:k);
-    Sk = S(1:k,1:k);
+% Find singular values which obey the following rule
+N = find(diag(S) >= hp/100,1,'last');
 
-    RM = Vk * diag(1./diag(Sk)) * Uk';
+Uk = U(:,1:N);
+Vk = V(:,1:N);
+Sk = S(1:N,1:N);
+
+RM = Vk * diag(1./diag(Sk)) * Uk';
+
 end
 
