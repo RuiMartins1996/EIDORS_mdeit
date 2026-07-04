@@ -202,13 +202,11 @@ plot(datai_mdeit.meas,'b-');
 plot(datah_mdeit.meas,'ys');
 plot(datar.meas,'r.')
 
-
-
 figure
 
 subplot(1,2,1)
-show_fem(img_eit_absolute);
-plot_sensors(img_eit_absolute);
+show_fem(img_eit_absolute_2);
+plot_sensors(img_eit_absolute_2);
 title('EIT absolute solver')
 
 subplot(1,2,2)
