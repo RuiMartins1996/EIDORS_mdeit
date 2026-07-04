@@ -13,17 +13,46 @@ addpath(genpath(fullfile(script_folder,'functions')));
 
 eidors_folder = setup_eidors(script_folder);
 
+
+% %% ==================== OPTIONAL SELF-TEST ============================
+% % Uncomment to sanity-check the solver on a toy dense problem, and to
+% % confirm 'pcg' and 'direct' solve_methods agree (both operate on the
+% % same dense J, just via different linear solves - useful before
+% % trusting the matrix-free path on MDEIT):
+% %
+%   rng(0);
+%   m = 50; n = 10;
+%   A_true = randn(m,n);
+%   x_true = randn(n,1);
+%   data = A_true*x_true;
+% 
+%   function [r,J] = toy_fun(x, A_true, data)
+%       r = A_true*x - data;
+%       if nargout > 1
+%           J = A_true;   % linear problem: Jacobian is constant
+%       end
+%   end
+% 
+%   x0 = zeros(n,1);
+%   opts.solve_method = 'direct';
+%   [x_direct, info_direct] = levenberg_marquardt(@(x) toy_fun(x,A_true,data), x0, opts);
+% 
+%   opts.solve_method = 'pcg';
+%   [x_pcg, info_pcg] = levenberg_marquardt(@(x) toy_fun(x,A_true,data), x0, opts);
+% 
+%   disp(norm(x_direct - x_pcg) / norm(x_direct));  % should be ~1e-4..1e-6
+%   disp(norm(x_direct - x_true) / norm(x_true));   % should be small
 %% Create forward model for reconstruction and for forward simulation
 
 background_conductivity = 1.0;
 
 height = 3;
 radius = 1.0;
-maxsz_recon = 0.1;
-maxsz_fwd = 0.07;
+maxsz_recon = 0.2;
+maxsz_fwd = 0.1;
 
-num_electrodes_ring = 8;
-num_rings = 4;
+num_electrodes_ring = 6;
+num_rings = 2;
 ring_vert_pos = height/(num_rings+1):height/(num_rings+1):height-height/(num_rings+1);
 electrode_radius = 0.3;
 
@@ -33,7 +62,7 @@ current_amplitude = 1.0;
 elec_pos = [num_electrodes_ring,ring_vert_pos];
 elec_shape = [electrode_radius, electrode_radius, maxsz_recon ]; %square electrodes
 
-anomaly_conductivity = 0.1; % (0 according to Kai's thesis, but check notes)
+anomaly_conductivity = 10; % (0 according to Kai's thesis, but check notes)
 anomaly_position = [radius/2,0,height/2]; %  [0,0,35]*1e-3/l0; % pg 172
 anomaly_radius = 0.25; % 25mm of diameter, pg 172
 
@@ -103,11 +132,28 @@ datai_mdeit = fwd_solve_1st_order_mdeit(img2);
 datah_eit = fwd_solve(img1);
 datai_eit = fwd_solve(img2);
 
+figure
+subplot(1,2,1)
+hold on
+plot(datai_mdeit.meas,'b-');
+plot(datah_mdeit.meas,'r.');
+legend('Inhomogeneous','Homogeneous')
+
+
+subplot(1,2,2)
+hold on
+plot(datai_eit.meas,'b-');
+plot(datah_eit.meas,'r.');
+legend('Inhomogeneous','Homogeneous')
+
+
+
 %% Pollute data with a small amount of gaussian white noise
 
 % Add gaussian white noise
 data = calc_difference_data_mdeit(datah_mdeit,datai_mdeit,img1.fwd_model);
-noise_strength = max(abs(data))/10; % Default noise strength
+% noise_strength = max(abs(data))/10; % Default noise strength
+noise_strength = 0;
 
 % datah_mdeit.meas = datah_mdeit.meas + noise_level_mdeit * randn(size(datah_mdeit.meas));
 datai_mdeit.meas = datai_mdeit.meas + noise_strength * randn(size(datai_mdeit.meas));
@@ -126,34 +172,49 @@ img_bkgnd = mk_image(imdl,background_conductivity);
 imdl.jacobian_bkgnd.elem_data = img_bkgnd.elem_data;
 
 % imdl.RtR_prior = @prior_tikhonov;% the default prior is prior_laplace
-imdl.RtR_prior = @prior_tikhonov;% the default prior is prior_laplace
+imdl.RtR_prior = @prior_noser;% the default prior is prior_laplace
 
 %% MDEIT solve 
 
 imdl.inv_solve_core.print_diagnostics = true;
 imdl.hyperparameter.value = 0.005;
 
-% tic
-% imgr_mdeit = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit,datai_mdeit);
-% disp(toc)
+imdl.inv_solve_core.do_pcg = true;
 
+
+[img_eit_absolute_1] = inv_solve_abs_GN_prior( imdl, datai_eit);
+[img_eit_absolute_2] = inv_solve_abs_GN_constrain(imdl, datai_eit);
+
+%%
 imdl.inv_solve_core.do_pcg = true;
 tic
-imgr_mdeit_matrix_free = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit,datai_mdeit);
+imgr_mdeit_absolute = inv_solve_absolute_LM_mdeit(imdl, datai_mdeit);
 disp(toc);
+
+datar = fwd_solve_1st_order_mdeit(imgr_mdeit_absolute);
 
 %% Plots 
 figure
 
+hold on
+plot(datai_mdeit.meas,'b-');
+
+plot(datah_mdeit.meas,'ys');
+plot(datar.meas,'r.')
+
+
+
+figure
+
 subplot(1,2,1)
-show_fem(imgr_mdeit);
-plot_sensors(imgr_mdeit);
-title('left-divide GN')
+show_fem(img_eit_absolute);
+plot_sensors(img_eit_absolute);
+title('EIT absolute solver')
 
 subplot(1,2,2)
-show_fem(imgr_mdeit_matrix_free );
-plot_sensors(imgr_mdeit_matrix_free);
-title('Matrix-free GN')
+show_fem(imgr_mdeit_absolute);
+plot_sensors(imgr_mdeit_absolute);
+title('MDEIT ab Solver')
 
 disp('Done');
 
