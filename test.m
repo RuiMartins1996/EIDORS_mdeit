@@ -19,8 +19,8 @@ background_conductivity = 1.0;
 
 height = 3;
 radius = 1.0;
-maxsz_recon = 0.2;
-maxsz_fwd = 0.1;
+maxsz_recon = 0.4;
+maxsz_fwd = 0.3;
 
 num_electrodes_ring = 8;
 num_rings = 4;
@@ -93,6 +93,27 @@ img1 = mk_image(fmdl_fwd,background_conductivity);
 select_fcn = @(x,y,z) (x-anomaly_position(1)).^2 + (y-anomaly_position(2)).^2 + (z-anomaly_position(3)).^2 < anomaly_radius^2;
 memb_frac = elem_select( img1.fwd_model, select_fcn);
 img2 = mk_image(img1, background_conductivity*(1 + memb_frac));
+
+%% Test jacobian vector product
+
+% Uncomment to verify the operator against your existing dense
+% calc_jacobian_mdeit on a case small enough to assemble J explicitly:
+
+img = img1;
+J   = calc_jacobian_mdeit(img);
+Jop = calc_jacobian_operator_mdeit(img);
+
+for i = 1:10
+v   = randn(size(J,2),1);
+w   = randn(size(J,1),1);
+disp(norm(J*v      - Jop.mtimes(v))       / norm(J*v));
+disp(norm(J.'*w    - Jop.mtimes_transp(w))/ norm(J.'*w));
+end
+
+% Both should be ~1e-12 (machine precision), confirming the
+% contraction-order rewrite is mathematically identical to the
+% explicit tensor construction.
+
 
 %% Compute forward solutions 
 
