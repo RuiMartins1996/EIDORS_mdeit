@@ -27,7 +27,12 @@ function img= inv_solve_diff_GN_one_step_mdeit( inv_model, data1, data2)
 %
 % The optimal step_size is returned in img.info.step_size.
 %
-% See also INV_SOLVE, CALC_SOLUTION_ERROR, FMINBND
+% If inv_model.inv_solve_core.do_pcg = true, the normal equations are
+% solved with PCG using a MATRIX-FREE Jacobian operator
+% (calc_jacobian_operator_mdeit): J and J'*J are never assembled, only
+% J*v / J'*w matvecs are used inside the PCG iteration.
+%
+% See also INV_SOLVE, CALC_SOLUTION_ERROR, FMINBND, CALC_JACOBIAN_OPERATOR_MDEIT
 
 % (C) 2005-2013 Andy Adler and Bartlomiej Grychtol. 
 % License: GPL version 2 or version 3
@@ -89,14 +94,20 @@ end
 
 if do_pcg
    % Emit a warning that pcg is being used
-   eidors_msg('inv_solve_diff_GN_one_step: Using PCG solver',2);
+   eidors_msg('inv_solve_diff_GN_one_step: Using PCG solver (matrix-free Jacobian)',2);
 
    img_bkgnd = calc_jacobian_bkgnd(inv_model);
-   J = calc_jacobian_mdeit(img_bkgnd);
+
+   % Matrix-free operator: builds Gamma/forward/adjoint solves ONCE,
+   % then hands back cheap J*v / J'*w closures. Neither J nor J'*J
+   % is ever assembled.
+   Jop = calc_jacobian_operator_mdeit(img_bkgnd);
+
    RtR = calc_RtR_prior(inv_model);
-   hp = calc_hyperparameter_mdeit(inv_model);
-   rhs = J' * dm;
-   sol = solve_normal_equations_pcg(J, RtR, hp, rhs, tol, maxit);
+   hp  = calc_hyperparameter_mdeit(inv_model);
+
+   rhs = Jop.mtimes_transp(dm);
+   sol = solve_normal_equations_pcg(Jop, RtR, hp, rhs, tol, maxit);
 else
    % Emit a warning that left_divide is being used
    eidors_msg('inv_solve_diff_GN_one_step: Using left_divide solver',2);
@@ -104,15 +115,16 @@ else
 end
 end
 
-function sol = solve_normal_equations_pcg(J, RtR, hp, rhs, tol, maxit)
+function sol = solve_normal_equations_pcg(Jop, RtR, hp, rhs, tol, maxit)
 n_unknowns = size(rhs, 1);
 n_rhs = size(rhs, 2);
 sol = zeros(n_unknowns, n_rhs);
 
-% Compute J'*J + hp^2*RtR once 
-A = J' * J + hp^2 * RtR;
-
-apply_normal_eq = @(x) A * x;
+% Matrix-free application of (J'*J + hp^2*RtR)*x.
+% J'*J is never assembled: each call does Jop.mtimes (a forward matvec)
+% followed by Jop.mtimes_transp (an adjoint matvec), both of which
+% themselves avoid forming J.
+apply_normal_eq = @(x) Jop.mtimes_transp(Jop.mtimes(x)) + hp^2 * (RtR * x);
 
 for rhs_idx = 1:n_rhs
    [sol(:, rhs_idx), flag, relres, iter] = pcg( ...

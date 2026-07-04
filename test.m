@@ -19,8 +19,8 @@ background_conductivity = 1.0;
 
 height = 3;
 radius = 1.0;
-maxsz_recon = 0.4;
-maxsz_fwd = 0.3;
+maxsz_recon = 0.1;
+maxsz_fwd = 0.07;
 
 num_electrodes_ring = 8;
 num_rings = 4;
@@ -94,27 +94,6 @@ select_fcn = @(x,y,z) (x-anomaly_position(1)).^2 + (y-anomaly_position(2)).^2 + 
 memb_frac = elem_select( img1.fwd_model, select_fcn);
 img2 = mk_image(img1, background_conductivity*(1 + memb_frac));
 
-%% Test jacobian vector product
-
-% Uncomment to verify the operator against your existing dense
-% calc_jacobian_mdeit on a case small enough to assemble J explicitly:
-
-img = img1;
-J   = calc_jacobian_mdeit(img);
-Jop = calc_jacobian_operator_mdeit(img);
-
-for i = 1:10
-v   = randn(size(J,2),1);
-w   = randn(size(J,1),1);
-disp(norm(J*v      - Jop.mtimes(v))       / norm(J*v));
-disp(norm(J.'*w    - Jop.mtimes_transp(w))/ norm(J.'*w));
-end
-
-% Both should be ~1e-12 (machine precision), confirming the
-% contraction-order rewrite is mathematically identical to the
-% explicit tensor construction.
-
-
 %% Compute forward solutions 
 
 % Compute forward solutions
@@ -152,44 +131,29 @@ imdl.RtR_prior = @prior_tikhonov;% the default prior is prior_laplace
 %% MDEIT solve 
 
 imdl.inv_solve_core.print_diagnostics = true;
-
 imdl.hyperparameter.value = 0.005;
-imgr_mdeit = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit,datai_mdeit);
 
-%% Noise correction
+% tic
+% imgr_mdeit = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit,datai_mdeit);
+% disp(toc)
 
-function noise_data = noise_generator(imgh,imgi,num_noise_repetitions)
-datah = fwd_solve_1st_order_mdeit(imgh);
-datai = fwd_solve_1st_order_mdeit(imgi);
-
-data = calc_difference_data_mdeit(datah,datai,imgh.fwd_model);
-
-% Add Gaussian white noise
-noise_strength = max(abs(data))/10; % Default noise strength
-noise_data = noise_strength * randn(size(data,1),num_noise_repetitions);
-
-end
-
-num_noise_repetitions = 30;
-noise_data= noise_generator(img1,img2,num_noise_repetitions);
-
-sigma_std = noise_correction(imdl,noise_data);
-
-imgr_mdeit_noise_corrected = imgr_mdeit;
-imgr_mdeit_noise_corrected.elem_data = imgr_mdeit.elem_data./sigma_std;
+imdl.inv_solve_core.do_pcg = true;
+tic
+imgr_mdeit_matrix_free = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit,datai_mdeit);
+disp(toc);
 
 %% Plots 
 figure
 
 subplot(1,2,1)
-show_fem(imgr_mdeit)
-plot_sensors(imgr_mdeit)
-title('Normal')
+show_fem(imgr_mdeit);
+plot_sensors(imgr_mdeit);
+title('left-divide GN')
 
 subplot(1,2,2)
-show_fem(imgr_mdeit_noise_corrected)
-plot_sensors(imgr_mdeit_noise_corrected)
-title('Noise-Corrected')
+show_fem(imgr_mdeit_matrix_free );
+plot_sensors(imgr_mdeit_matrix_free);
+title('Matrix-free GN')
 
 disp('Done');
 
