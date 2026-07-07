@@ -3,6 +3,7 @@ Important:
 - Add mesh convergence utility
 - Add anomaly insertion (in the mesh, not just editing the elements) utility
 - Make a tutorial for different solvers.
+- Separate armijo line search on a different function. Call that from gauss_newton or levenberg_marquardt.
 
 Later:
 - Higher order forward solver
