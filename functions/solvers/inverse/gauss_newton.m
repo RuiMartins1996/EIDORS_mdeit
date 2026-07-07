@@ -77,7 +77,7 @@ function [x, info] = gauss_newton(fun, x0, opts)
 %       end
 %   end
 %
-% See also PCG, LEVENBERG_MARQUARDT
+% See also PCG, LEVENBERG_MARQUARDT, ARMIJO_BLS
 
 if nargin < 3
     opts = struct();
@@ -110,31 +110,9 @@ for iter = 1:opts.maxiter
         slope = g.'*p;
     end
 
-    alpha = opts.alpha0;
-    accepted = false;
-    n_bls = 0;
-    dx = zeros(size(x));
-
-    while ~accepted
-        x_trial = x + alpha*p;
-        r_trial = fun(x_trial);   % nargout == 1: residual only, cheap(er)
-        cost_trial = full_cost(r_trial);
-
-        if cost_trial <= cost + opts.alpha_bls*alpha*slope
-            accepted = true;
-            dx = alpha*p;
-            x = x_trial;
-            cost = cost_trial;
-        else
-            alpha = alpha*opts.beta_bls;
-            n_bls = n_bls + 1;
-            if alpha < opts.alpha_min || n_bls >= opts.max_bls_tries
-                % No sufficient-decrease step found along p; give up the
-                % line search and report a stall (x is left unchanged).
-                accepted = true;
-                exitflag = 2;
-            end
-        end
+    [x, cost, alpha, dx, bls_exitflag] = armijo_bls(fun, x, p, cost, slope, opts);
+    if bls_exitflag == 2
+        exitflag = 2;
     end
 
     n_recorded = n_recorded + 1;
