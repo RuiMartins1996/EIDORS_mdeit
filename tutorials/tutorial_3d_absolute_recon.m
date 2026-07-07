@@ -118,23 +118,17 @@ imdl.hyperparameter.value = 0.005;
 % [img_eit_absolute_gn_c] = inv_solve_abs_GN_constrain(imdl, datai_eit);
 
 %% MDEIT inverse solve
-imgr_mdeit_absolute_lm = inv_solve_absolute_LM_mdeit(imdl, datai_mdeit);
 imgr_mdeit_absolute_gn = inv_solve_absolute_GN_mdeit(imdl, datai_mdeit);
 
 %% Plots 
 figure
 
-subplot(1,3,1)
+subplot(1,2,1)
 show_fem(img_eit_absolute_gn);
 plot_sensors(img_eit_absolute_gn);
 title('EIT: Absolute GN')
 
-subplot(1,3,2)
-show_fem(imgr_mdeit_absolute_lm);
-plot_sensors(imgr_mdeit_absolute_lm);
-title('MDEIT: Absolute LM')
-
-subplot(1,3,3)
+subplot(1,2,2)
 show_fem(imgr_mdeit_absolute_gn);
 plot_sensors(imgr_mdeit_absolute_gn);
 title('MDEIT: Absolute GN')
