@@ -34,8 +34,6 @@ function img = inv_solve_absolute_GN_mdeit(inv_model, data)
     img0 = calc_jacobian_bkgnd(inv_model);
     x0 = img0.elem_data;
 
-    % R such that R'*R = RtR_prior (see calc_R_prior.m); the prior penalty
-    % becomes 0.5*hp^2*||R*(x-x0)||^2, i.e. an extra "measurement" block.
     R  = calc_R_prior(inv_model);
     hp = calc_hyperparameter_mdeit(inv_model);
 
@@ -65,7 +63,7 @@ function [r, Jinfo] = mdeit_residual(x, data, img)
     % the "model minus target" residual convention, so r must be sim-meas
     % here (not meas-sim), matching its toy self-test convention.
     r = calc_difference_data_mdeit(data, simulated_data, img.fwd_model);
-
+    
     if nargout > 1
         % Matrix-free operator (no J ever assembled) - see
         % calc_jacobian_operator_mdeit.m
