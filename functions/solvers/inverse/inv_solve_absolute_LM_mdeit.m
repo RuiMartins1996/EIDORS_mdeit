@@ -111,14 +111,14 @@ end
 
 function [maxiter, tol, print_diagnostics] = parse_solver_parameters(inv_model)
     if ~isfield(inv_model, 'inv_solve_core')
-        maxiter = 20; % default value
+        maxiter = 10; % default value
         tol = 1e-4; % default value
         print_diagnostics = false; % default value
     else
         if isfield(inv_model.inv_solve_core, 'maxiter')
             maxiter = inv_model.inv_solve_core.maxiter;
         else
-            maxiter = 20; % default value
+            maxiter = 10; % default value
         end
 
         if isfield(inv_model.inv_solve_core, 'tol')

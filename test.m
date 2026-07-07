@@ -49,7 +49,7 @@ background_conductivity = 1.0;
 height = 3;
 radius = 1.0;
 maxsz_recon = 0.2;
-maxsz_fwd = 0.1;
+maxsz_fwd = 0.18;
 
 num_electrodes_ring = 6;
 num_rings = 2;
@@ -85,21 +85,23 @@ for i = 1:num_electrodes_ring*num_rings
 end
 %% Assign magnetometers
 
-num_sensors_ring = num_electrodes_ring;
+num_sensors_ring = 2*num_electrodes_ring;
 sensor_positions = zeros(numel(fmdl_recon.electrode),3);
-sensor_distance = radius/5;
 
-cyl_center = [0,0,height/2];
+num_sensors = num_sensors_ring*num_rings;
 
-for m = 1:numel(fmdl_recon.electrode)
-    elec_nodes = fmdl_recon.nodes(fmdl_recon.electrode(m).nodes,:);
-    elec_center = mean(elec_nodes,1);
-    
-    displacement = elec_center-cyl_center;
-    displacement = [displacement(1:2),0];
-    displacement = displacement/norm(displacement);
+thetam = 0:2*pi/num_sensors_ring:2*pi-2*pi/num_sensors_ring;
+sensor_radius = 1.5*radius;
 
-    sensor_positions(m,:) = elec_center + displacement*sensor_distance;
+for i = 1:num_rings
+    for m = 1:num_sensors_ring
+        
+        xm = sensor_radius*cos(thetam(m));
+        ym = sensor_radius*sin(thetam(m));
+        zm = ring_vert_pos(i);
+
+        sensor_positions((i-1)*num_sensors_ring+m,:) = [xm,ym,zm];
+    end
 end
 
 sensor_axes = struct('axis1',[1,0,0],'axis2',[0,1,0],'axis3',[0,0,1]);
@@ -188,10 +190,13 @@ imdl.inv_solve_core.do_pcg = true;
 %%
 imdl.inv_solve_core.do_pcg = true;
 tic
-imgr_mdeit_absolute = inv_solve_absolute_LM_mdeit(imdl, datai_mdeit);
+imgr_mdeit_absolute_lm = inv_solve_absolute_LM_mdeit(imdl, datai_mdeit);
 disp(toc);
 
-datar = fwd_solve_1st_order_mdeit(imgr_mdeit_absolute);
+imgr_mdeit_absolute_gn = inv_solve_absolute_GN_mdeit(imdl, datai_mdeit);
+
+datar = fwd_solve_1st_order_mdeit(imgr_mdeit_absolute_lm);
+
 
 %% Plots 
 figure
@@ -204,15 +209,25 @@ plot(datar.meas,'r.')
 
 figure
 
-subplot(1,2,1)
+subplot(1,4,1)
 show_fem(img_eit_absolute_2);
 plot_sensors(img_eit_absolute_2);
-title('EIT absolute solver')
+title('EIT absolute solver (1)')
 
-subplot(1,2,2)
-show_fem(imgr_mdeit_absolute);
-plot_sensors(imgr_mdeit_absolute);
-title('MDEIT absolute Solver')
+subplot(1,4,2)
+show_fem(img_eit_absolute_1);
+plot_sensors(img_eit_absolute_1);
+title('EIT absolute solver (2)')
+
+subplot(1,4,3)
+show_fem(imgr_mdeit_absolute_lm);
+plot_sensors(imgr_mdeit_absolute_lm);
+title('MDEIT absolute Solver(1)')
+
+subplot(1,4,4)
+show_fem(imgr_mdeit_absolute_gn);
+plot_sensors(imgr_mdeit_absolute_gn);
+title('MDEIT absolute Solver(2)')
 
 disp('Done');
 
