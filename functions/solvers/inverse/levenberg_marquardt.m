@@ -56,17 +56,6 @@ function [x, info] = levenberg_marquardt(fun, x0, opts)
 %     pcg_tol        inner PCG tolerance                 (default 1e-6)
 %     pcg_maxit      inner PCG max iterations             (default 100)
 %     print_diagnostics  print per-iteration info         (default false)
-%     RtR            optional Tikhonov prior matrix (n x n)  (default [])
-%     hp             prior hyperparameter                 (default 0)
-%     x_ref          prior reference point (n x 1)        (default x0)
-%                       When RtR and hp are supplied, the objective becomes
-%                       0.5*||r||^2 + 0.5*hp^2*(x-x_ref)'*RtR*(x-x_ref),
-%                       i.e. classic Tikhonov/NOSER-style regularization
-%                       (as used by EIDORS's own GN solvers), folded into
-%                       the same damped normal-equations solve as mu*I -
-%                       still fully matrix-free (RtR is only ever applied
-%                       as RtR*v). Omitting RtR/hp reproduces the original
-%                       damping-only behaviour exactly.
 %
 % OUTPUTS
 %   x    : solution
@@ -106,14 +95,9 @@ end
 opts = default_options(opts);
 
 x = x0(:);
-if isempty(opts.x_ref)
-    opts.x_ref = x0(:);
-else
-    opts.x_ref = opts.x_ref(:);
-end
 
 r = fun(x);
-cost = full_cost(r, x, opts.x_ref, opts.RtR, opts.hp);
+cost = compute_cost(r);
 
 mu = opts.mu0;
 
@@ -127,11 +111,8 @@ for iter = 1:opts.maxiter
     % Full evaluation (residual + Jacobian) ONCE per outer iteration,
     % regardless of how many mu values get tried below.
     [r, J] = fun(x);
-    cost = full_cost(r, x, opts.x_ref, opts.RtR, opts.hp);
+    cost = compute_cost(r);
     g = apply_jacobian(J, r, 'transp');   % g = J'*r
-    if opts.hp ~= 0 && ~isempty(opts.RtR)
-        g = g + opts.hp^2 * (opts.RtR * (x - opts.x_ref));
-    end
 
     accepted = false;
     n_mu_tries = 0;
@@ -142,7 +123,7 @@ for iter = 1:opts.maxiter
 
         x_trial = x + dx;
         r_trial = fun(x_trial);   % nargout == 1: residual only, cheap(er)
-        cost_trial = full_cost(r_trial, x_trial, opts.x_ref, opts.RtR, opts.hp);
+        cost_trial = compute_cost(r_trial);
 
         if cost_trial < cost
             accepted = true;
@@ -191,8 +172,6 @@ end
 function dx = solve_damped_normal_equations(J, g, mu, opts)
 % Solves (J'*J + mu*I)*dx = -g for dx.
 
-has_prior = opts.hp ~= 0 && ~isempty(opts.RtR);
-
 switch opts.solve_method
     case 'direct'
         if ~isnumeric(J)
@@ -202,18 +181,10 @@ switch opts.solve_method
         end
         n = size(J,2);
         A = J.'*J + mu*speye(n);
-        if has_prior
-            A = A + opts.hp^2*opts.RtR;
-        end
         dx = -(A\g);
 
     case 'pcg'
-        if has_prior
-            apply_A = @(v) apply_jacobian(J, apply_jacobian(J, v, 'notransp'), 'transp') ...
-                           + mu*v + opts.hp^2*(opts.RtR*v);
-        else
-            apply_A = @(v) apply_jacobian(J, apply_jacobian(J, v, 'notransp'), 'transp') + mu*v;
-        end
+        apply_A = @(v) apply_jacobian(J, apply_jacobian(J, v, 'notransp'), 'transp') + mu*v;
         dx = pcg(apply_A, -g, opts.pcg_tol, opts.pcg_maxit);
 
     otherwise
@@ -223,14 +194,9 @@ end
 end
 
 
-%% ==================== OBJECTIVE (RESIDUAL + PRIOR) ===================
-function c = full_cost(r, x, x_ref, RtR, hp)
-% 0.5*||r||^2, plus the optional Tikhonov penalty 0.5*hp^2*(x-x_ref)'*RtR*(x-x_ref).
-c = 0.5*(r.'*r);
-if hp ~= 0 && ~isempty(RtR)
-    dxr = x - x_ref;
-    c = c + 0.5*hp^2*(dxr.'*(RtR*dxr));
-end
+%% ==================== OBJECTIVE (RESIDUAL) ===========================
+function c = compute_cost(r)
+    c = 0.5*(r.'*r);
 end
 
 
@@ -260,7 +226,7 @@ end
 %% ==================== OPTIONS ========================================
 function opts = default_options(opts)
 
-defaults.maxiter          = 20;
+defaults.maxiter          = 10;
 defaults.tol              = 1e-4;
 defaults.mu0              = 1e-3;
 defaults.mu_up            = 10;
@@ -272,9 +238,6 @@ defaults.solve_method     = 'pcg';
 defaults.pcg_tol          = 1e-6;
 defaults.pcg_maxit        = 100;
 defaults.print_diagnostics = false;
-defaults.RtR              = [];
-defaults.hp               = 0;
-defaults.x_ref            = [];
 
 fn = fieldnames(defaults);
 for k = 1:numel(fn)

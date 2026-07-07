@@ -212,7 +212,7 @@ title('EIT absolute solver')
 subplot(1,2,2)
 show_fem(imgr_mdeit_absolute);
 plot_sensors(imgr_mdeit_absolute);
-title('MDEIT ab Solver')
+title('MDEIT absolute Solver')
 
 disp('Done');
 

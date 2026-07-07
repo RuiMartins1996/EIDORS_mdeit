@@ -2,27 +2,24 @@ function img = inv_solve_absolute_LM_mdeit(inv_model, data)
     % INV_SOLVE_ABSOLUTE_LM_MDEIT  Absolute MDEIT solver via matrix-free LM.
     %
     % Uses the generic LEVENBERG_MARQUARDT solver (see levenberg_marquardt.m)
-    % rather than lsqnonlin. This is necessary because MATLAB's lsqnonlin
-    % cannot run matrix-free here:
-    %   - 'trust-region-reflective' (the only algorithm accepting
-    %     JacobianMultiplyFcn) requires #measurements >= #elements, which
-    %     practically never holds for MDEIT/EIT absolute imaging.
-    %   - 'levenberg-marquardt' has no matrix-free hook at all; it always
-    %     computes JAC'*costFun expecting an explicit Jacobian matrix.
-    %
+
     % The residual function below returns the matrix-free Jacobian
     % operator from calc_jacobian_operator_mdeit as its second output;
     % levenberg_marquardt's internal PCG solve then uses only
     % Jop.mtimes / Jop.mtimes_transp, so J and J'*J are never assembled.
     %
-    % Spatial regularization: inv_model.RtR_prior and
-    % inv_model.hyperparameter are read via calc_RtR_prior/
-    % calc_hyperparameter_mdeit (same convention as
-    % inv_solve_diff_GN_one_step_mdeit.m and EIDORS's inv_solve_abs_GN_prior)
-    % and folded into the LM normal equations as hp^2*RtR, on top of the
-    % usual mu*I damping.
+    % LEVENBERG_MARQUARDT itself knows nothing about priors - it just
+    % minimizes 0.5*||r||^2. The Tikhonov/NOSER-style spatial prior
+    % (inv_model.RtR_prior, inv_model.hyperparameter) is instead folded in
+    % here by augmenting the residual/Jacobian: appending hp*R*(x-x_ref)
+    % to r and hp*R as extra (matrix-free) rows to J, since
+    %   0.5*||[r; hp*R*(x-x_ref)]||^2 = 0.5*||r||^2 + 0.5*hp^2*(x-x_ref)'*RtR*(x-x_ref)
+    % with RtR = R'*R, which reproduces the usual damped Gauss-Newton
+    % normal equations (J'J+mu*I+hp^2*RtR)dx=-(J'r+hp^2*RtR*(x-x_ref))
+    % once the outer LM step forms J_aug'*J_aug and J_aug'*r_aug.
     %
-    % See also LEVENBERG_MARQUARDT, CALC_JACOBIAN_OPERATOR_MDEIT, CALC_RTR_PRIOR
+    % See also LEVENBERG_MARQUARDT, CALC_JACOBIAN_OPERATOR_MDEIT,
+    % CALC_RTR_PRIOR, CALC_R_PRIOR
 
     data = parse_data(data);
 
@@ -36,15 +33,12 @@ function img = inv_solve_absolute_LM_mdeit(inv_model, data)
     img0 = calc_jacobian_bkgnd(inv_model);
     x0 = img0.elem_data;
 
-    % Tikhonov/NOSER-style spatial prior, matching how
-    % inv_solve_diff_GN_one_step_mdeit.m and EIDORS's own
-    % inv_solve_abs_GN_prior pull these from inv_model. Folded into the
-    % LM normal-equations solve alongside mu*I - see levenberg_marquardt.m.
-    lm_opts.RtR   = calc_RtR_prior(inv_model);
-    lm_opts.hp    = calc_hyperparameter_mdeit(inv_model);
-    lm_opts.x_ref = x0;
+    % R such that R'*R = RtR_prior (see calc_R_prior.m); the prior penalty
+    % becomes 0.5*hp^2*||R*(x-x0)||^2, i.e. an extra "measurement" block.
+    R  = calc_R_prior(inv_model);
+    hp = calc_hyperparameter_mdeit(inv_model);
 
-    fun = @(x) mdeit_residual(x, data, img0);
+    fun = @(x) mdeit_residual_with_prior(x, data, img0, R, hp, x0);
 
     [x, info] = levenberg_marquardt(fun, x0, lm_opts);
 
@@ -75,6 +69,27 @@ function [r, Jinfo] = mdeit_residual(x, data, img)
         % Matrix-free operator (no J ever assembled) - see
         % calc_jacobian_operator_mdeit.m
         Jinfo = calc_jacobian_operator_mdeit(img);
+    end
+end
+
+function [r_aug, Jop_aug] = mdeit_residual_with_prior(x, data, img, R, hp, x_ref)
+    % Wraps mdeit_residual, appending the Tikhonov/NOSER prior as an
+    % extra "measurement" block hp*R*(x-x_ref) on the residual and hp*R
+    % as extra matrix-free rows on the Jacobian, so levenberg_marquardt
+    % sees a plain augmented least-squares problem and needs no special
+    % prior handling of its own.
+    if nargout > 1
+        [r, Jinfo] = mdeit_residual(x, data, img);
+    else
+        r = mdeit_residual(x, data, img);
+    end
+
+    r_aug = [r; hp*(R*(x - x_ref))];
+
+    if nargout > 1
+        m = numel(r);
+        Jop_aug.mtimes        = @(v) [Jinfo.mtimes(v); hp*(R*v)];
+        Jop_aug.mtimes_transp = @(w) Jinfo.mtimes_transp(w(1:m)) + hp*(R.'*w(m+1:end));
     end
 end
 
