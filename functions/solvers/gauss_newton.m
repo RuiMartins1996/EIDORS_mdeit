@@ -39,13 +39,10 @@ function [x, info] = gauss_newton(fun, x0, opts)
 %   x0    : initial guess, n x 1 (or reshape-able to a column)
 %
 %   opts  : optional struct, all fields optional:
-%     maxiter        outer GN iterations                  (default 20)
-%     tol            ||dx|| convergence tolerance          (default 1e-4)
-%     alpha0         initial line-search step length       (default 1.0)
-%     alpha_bls      Armijo sufficient-decrease constant    (default 1e-4)
-%     beta_bls       backtracking shrink factor             (default 0.5)
-%     alpha_min      smallest step length tried             (default 1e-16)
-%     max_bls_tries  max step halvings per outer step       (default 50)
+%     maxiter        outer GN iterations                  (default 5)
+%     tol            ||g|| convergence tolerance, where g=J'*r is the
+%                    gradient of the cost at the current iterate (the
+%                    optimality condition)                 (default 1e-4)
 %     solve_method   'pcg' (default) or 'direct'
 %                       'pcg'    - solves (J'J)p=-g with pcg, using only
 %                                  J*v / J'*w matvecs (works for BOTH
@@ -62,11 +59,15 @@ function [x, info] = gauss_newton(fun, x0, opts)
 %                      thousands of inner iterations)
 %     print_diagnostics  print per-iteration info           (default false)
 %
+%   The Armijo backtracking line search (alpha0, alpha_bls, beta_bls,
+%   alpha_min, max_bls_tries) is NOT user-tunable - it always uses the
+%   defaults hardcoded in default_options, regardless of opts.
+%
 % OUTPUTS
 %   x    : solution
 %   info : struct with fields
 %     iterations    : number of outer iterations run
-%     exitflag      : 1 = converged (||dx||<tol)
+%     exitflag      : 1 = converged (||g||<tol, g=J'*r at the iterate)
 %                     2 = stalled (line search failed to find a decrease)
 %                     0 = hit maxiter without converging
 %     cost_history  : 1 x iterations, 0.5*||r||^2 at each accepted step
@@ -102,6 +103,20 @@ for iter = 1:opts.maxiter
     cost = full_cost(r);
     g = apply_jacobian(J, r, 'transp');   % g = J'*r  (gradient of 0.5||r||^2)
 
+    % Optimality condition: stop when the gradient at the current
+    % iterate is (numerically) zero
+    if norm(g) < opts.tol
+        exitflag = 1;
+        n_recorded = n_recorded + 1;
+        cost_history(n_recorded)  = cost;
+        alpha_history(n_recorded) = 0;
+        if opts.print_diagnostics
+            fprintf('GN iter %3d: cost=%.6g  ||g||=%.3g < tol - converged (gradient optimality)\n', ...
+                iter, cost, norm(g));
+        end
+        break;
+    end
+
     p = solve_normal_equations(J, g, opts);   % full (undamped) GN step
 
     slope = g.'*p;   % directional derivative of the cost along p
@@ -128,10 +143,6 @@ for iter = 1:opts.maxiter
     end
 
     if exitflag == 2
-        break;
-    end
-    if norm(dx) < opts.tol
-        exitflag = 1;
         break;
     end
 end
@@ -216,7 +227,7 @@ defaults.tol               = 1e-4;
 defaults.alpha0            = 1.0;
 defaults.alpha_bls         = 1e-4;
 defaults.beta_bls          = 0.5;
-defaults.alpha_min         = 1e-16;
+defaults.alpha_min         = 1e-12;
 defaults.max_bls_tries     = 50;
 defaults.solve_method      = 'pcg';
 defaults.pcg_tol           = 1e-6;
@@ -228,6 +239,12 @@ for k = 1:numel(fn)
     if ~isfield(opts, fn{k})
         opts.(fn{k}) = defaults.(fn{k});
     end
+end
+
+% Backtracking line search parameters are not user-tunable - use the defaults
+bls_fields = {'alpha0','alpha_bls','beta_bls','alpha_min','max_bls_tries'};
+for k = 1:numel(bls_fields)
+    opts.(bls_fields{k}) = defaults.(bls_fields{k});
 end
 end
 

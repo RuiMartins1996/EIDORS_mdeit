@@ -166,17 +166,19 @@ function do_pcg = parse_do_pcg(inv_model)
 end
 
 function gn_opts = parse_gn_parameters(inv_model)
-    % Reads GN-specific knobs (line-search schedule, inner PCG settings)
-    % from inv_model.inv_solve_core, if present. See gauss_newton.m for
-    % the meaning/defaults of each field - only fields explicitly set
-    % here are overridden; the rest fall back to gauss_newton's own
-    % defaults.
+    % Reads GN-specific knobs (inner PCG settings) from
+    % inv_model.inv_solve_core, if present. See gauss_newton.m for the
+    % meaning/defaults of each field - only fields explicitly set here
+    % are overridden; the rest fall back to gauss_newton's own defaults.
+    %
+    % The Armijo backtracking line search parameters are intentionally
+    % NOT exposed here - gauss_newton always uses its own hardcoded
+    % defaults for those, regardless of inv_solve_core.
     gn_opts = struct();
 
     if isfield(inv_model, 'inv_solve_core')
         c = inv_model.inv_solve_core;
-        fields = {'alpha0','alpha_bls','beta_bls','alpha_min', ...
-                  'max_bls_tries','pcg_tol','pcg_maxit'};
+        fields = {'pcg_tol','pcg_maxit'};
         for k = 1:numel(fields)
             if isfield(c, fields{k})
                 gn_opts.(fields{k}) = c.(fields{k});
