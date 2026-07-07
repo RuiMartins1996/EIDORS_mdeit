@@ -1,6 +1,8 @@
 # Ignore the EIDORS source code directory
 /eidors-v3.12-ng/
 
+/temp
+
 # Ignore all .asv files
 *.asv
 
