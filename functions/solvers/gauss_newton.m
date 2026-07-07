@@ -55,7 +55,11 @@ function [x, info] = gauss_newton(fun, x0, opts)
 %                                  p = -A\g directly. ONLY valid if J is
 %                                  a numeric matrix (errors otherwise).
 %     pcg_tol        inner PCG tolerance                   (default 1e-6)
-%     pcg_maxit      inner PCG max iterations               (default 100)
+%     pcg_maxit      inner PCG max iterations               (default
+%                      min(numel(x0), 1000) - the exact-arithmetic upper
+%                      bound for CG convergence on an n x n SPD system,
+%                      capped so huge problems don't default to
+%                      thousands of inner iterations)
 %     print_diagnostics  print per-iteration info           (default false)
 %
 % OUTPUTS
@@ -82,9 +86,8 @@ function [x, info] = gauss_newton(fun, x0, opts)
 if nargin < 3
     opts = struct();
 end
-opts = default_options(opts);
-
 x = x0(:);
+opts = default_options(opts, numel(x));
 
 cost_history  = zeros(1, opts.maxiter);
 alpha_history = zeros(1, opts.maxiter);
@@ -156,8 +159,13 @@ switch opts.solve_method
         p = -(A\g);
 
     case 'pcg'
+        % Request the flag output so MATLAB's pcg does not print a
+        % convergence warning to the console on failure to converge
+        % (it only does so when flag isn't captured); non-convergence
+        % of the inner PCG is not fatal here since armijo_bls still
+        % accepts/rejects the resulting step.
         apply_A = @(v) apply_jacobian(J, apply_jacobian(J, v, 'notransp'), 'transp');
-        p = pcg(apply_A, -g, opts.pcg_tol, opts.pcg_maxit);
+        [p, ~] = pcg(apply_A, -g, opts.pcg_tol, opts.pcg_maxit);
 
     otherwise
         error('gauss_newton:bad_solve_method', ...
@@ -197,9 +205,13 @@ end
 
 
 %% ==================== OPTIONS ========================================
-function opts = default_options(opts)
+function opts = default_options(opts, n)
+% n = numel(x0), used only to size the pcg_maxit default: in exact
+% arithmetic, CG on an n x n SPD system converges in at most n
+% iterations, so that (capped, to keep huge problems bounded) is a far
+% more reasonable default than an arbitrary fixed constant.
 
-defaults.maxiter           = 20;
+defaults.maxiter           = 5;
 defaults.tol               = 1e-4;
 defaults.alpha0            = 1.0;
 defaults.alpha_bls         = 1e-4;
@@ -208,7 +220,7 @@ defaults.alpha_min         = 1e-16;
 defaults.max_bls_tries     = 50;
 defaults.solve_method      = 'pcg';
 defaults.pcg_tol           = 1e-6;
-defaults.pcg_maxit         = 100;
+defaults.pcg_maxit         = min(n, 1000);
 defaults.print_diagnostics = false;
 
 fn = fieldnames(defaults);

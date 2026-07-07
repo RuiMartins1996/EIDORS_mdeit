@@ -111,14 +111,16 @@ imdl.RtR_prior = @prior_noser;
 
 % Setup solver parameters
 imdl.inv_solve_core.print_diagnostics = false;
-imdl.inv_solve_core.do_pcg = true;
+imdl.inv_solve_core.do_pcg = true; %for the mdeit inverse solvers, you want this always true to avoid assembling the jacobian matrix
 imdl.hyperparameter.value = 0.005;
 
 %% EIT inverse solve 
+disp('Inverse EIT ...')
 [img_eit_absolute_gn] = inv_solve_abs_GN_prior( imdl, datai_eit);
 % [img_eit_absolute_gn_c] = inv_solve_abs_GN_constrain(imdl, datai_eit);
 
 %% MDEIT inverse solve
+disp('Inverse MDEIT ...')
 imgr_mdeit_absolute_gn = inv_solve_absolute_GN_mdeit(imdl, datai_mdeit);
 
 %% Plots 
