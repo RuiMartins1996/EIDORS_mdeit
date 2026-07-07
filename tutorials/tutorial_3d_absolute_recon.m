@@ -99,13 +99,14 @@ datai_eit = fwd_solve(img2);
 % Do noiseless reconstruction
 %% Create inverse model
 
-imdl = mk_common_model('a2c2',8); % Will replace most fields
+imdl = mk_common_model('a2c2',8); 
 imdl.fwd_model = fmdl;
 imdl = rmfield(imdl,'jacobian_bkgnd');
 
 % Setup inverse model
-img_bkgnd = mk_image(imdl,background_conductivity);
-imdl.jacobian_bkgnd.elem_data = img_bkgnd.elem_data;
+img_bkgnd = mk_image(imdl,background_conductivity); 
+% In absolute reconstruction, the background conductivity is used as prior.
+imdl.jacobian_bkgnd.elem_data = img_bkgnd.elem_data; 
 imdl.RtR_prior = @prior_noser;
 
 % Setup solver parameters
