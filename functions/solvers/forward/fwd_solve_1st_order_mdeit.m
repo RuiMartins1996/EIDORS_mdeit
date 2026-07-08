@@ -64,9 +64,9 @@ for i=1:length(dirichlet_nodes)
    % If all dirichlet patterns are the same, then calc in one go
    if length(dirichlet_nodes) == 1; rhs = 1:size(pp.QQ,2);
    else                           ; rhs = i; end
-   v(idx,rhs)= left_divide( s_mat.E(idx,idx), ...
-                     neumann_nodes{i}(idx,:) - ...
-                     s_mat.E(idx,:)*dirichlet_values{i},fwd_model);
+   E   = s_mat.E(idx,idx);
+   RHS = neumann_nodes{i}(idx,:) - s_mat.E(idx,:)*dirichlet_values{i};
+   v(idx,rhs) = solve_reduced_system(E, RHS, fwd_model);
 end
 
 % If model has a ground node, check if current flowing in this node
@@ -190,6 +190,45 @@ function pp = set_gnd_node(fwd_model, pp);
       d2  =  sum(bsxfun(@minus,fwd_model.nodes,ctr).^2,2);
       [~,pp.gnd_node] = min(d2);
       eidors_msg('Warning: no ground node found: choosing node %d',pp.gnd_node(1),1);
+   end
+
+% Solve the reduced linear system E*X = RHS.
+% Default is EIDORS left_divide (unchanged behavior). Set
+%    fwd_model.solve_mdeit.method = 'pcg' to use preconditioned conjugate
+% gradient, optionally with fwd_model.solve_mdeit.tol and
+% fwd_model.solve_mdeit.maxit.
+function X = solve_reduced_system(E, RHS, fwd_model)
+   method = 'left_divide';
+   if isfield(fwd_model,'solve_mdeit') && isfield(fwd_model.solve_mdeit,'method')
+      method = fwd_model.solve_mdeit.method;
+   end
+
+   switch method
+      case 'left_divide'
+         X = left_divide(E, RHS, fwd_model);
+      case 'pcg'
+         tol = 1e-8; maxit = min(size(E,1), 1000);
+         if isfield(fwd_model,'solve_mdeit') && isfield(fwd_model.solve_mdeit,'tol')
+            tol = fwd_model.solve_mdeit.tol;
+         end
+         if isfield(fwd_model,'solve_mdeit') && isfield(fwd_model.solve_mdeit,'maxit')
+            maxit = fwd_model.solve_mdeit.maxit;
+         end
+         % Simple Jacobi preconditioner: M = L*U = diag(diag(E))
+         L = sqrt(diag(diag(E))); U = L;
+         X = zeros(size(RHS,1), size(RHS,2));
+         for j = 1:size(RHS,2)
+            % Note: the standalone reference version passed tol*norm(RHS(:,j))
+            % as the tolerance. We pass tol directly because pcg already
+            % applies it relative to norm(b).
+            [X(:,j), flag] = pcg(E, RHS(:,j), tol, maxit, L, U);
+            if flag ~= 0
+               eidors_msg(['fwd_solve_1st_order_mdeit: pcg column %d ' ...
+                           'did not converge (flag %d)'], j, flag, 1);
+            end
+         end
+      otherwise
+         error('Unknown linear solver method: %s', method);
    end
 
 function [E, m_idx, pp] = mdl_reduction(E, mr, img, pp);
