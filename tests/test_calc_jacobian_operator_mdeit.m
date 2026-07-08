@@ -31,6 +31,7 @@ fprintf('== test_calc_jacobian_operator_mdeit ==\n');
 n_fail = 0;
 n_fail = n_fail + run_case('mdeit3', tol);
 n_fail = n_fail + run_case('mdeit1', tol);
+n_fail = n_fail + run_progress_smoke(tol);
 
 if n_fail > 0
     error('test_calc_jacobian_operator_mdeit: %d check(s) FAILED', n_fail);
@@ -90,6 +91,31 @@ for cs = chunk_sizes
     fprintf('  [%s] %-10s  J*v relerr=%.2e   J''*w relerr=%.2e\n', ...
         pf(ok_fwd && ok_trn), label, e_fwd, e_trn);
 end
+end
+
+
+%% ------------------------------------------------------------------------
+function n_fail = run_progress_smoke(tol)
+% Exercise the optional progress argument end-to-end: results must be
+% unchanged, and a live counter should print during the matvecs.
+n_fail = 0;
+fprintf('\n-- progress smoke (progress = true) --\n');
+
+img = build_small_mdeit_model('mdeit3');
+img.fwd_model.jacobian_operator.chunk_size = 7;   % many blocks -> visible bar
+
+J   = calc_jacobian_mdeit(img);
+Jop = calc_jacobian_operator_mdeit(img, true);    % <-- optional 2nd arg
+
+v = randn(size(J,2),1);
+w = randn(size(J,1),1);
+e_fwd = relerr(Jop.mtimes(v),        J*v);        % prints "Jop J*v: block .."
+e_trn = relerr(Jop.mtimes_transp(w), J.'*w);      % prints "Jop J'*w: block .."
+
+ok = (e_fwd < tol) && (e_trn < tol);
+n_fail = n_fail + ~ok;
+fprintf('  [%s] progress arg: J*v relerr=%.2e   J''*w relerr=%.2e\n', ...
+    pf(ok), e_fwd, e_trn);
 end
 
 

@@ -1,7 +1,13 @@
-function Jop = calc_jacobian_operator_mdeit(img)
+function Jop = calc_jacobian_operator_mdeit(img, progress)
 % CALC_JACOBIAN_OPERATOR_MDEIT  Matrix-free Jacobian operator for mDEIT.
 %
 %   Jop = calc_jacobian_operator_mdeit(img)
+%   Jop = calc_jacobian_operator_mdeit(img, progress)
+%
+% PROGRESS (optional): when true, each J*v / J'*w matvec prints a live
+% counter as it streams through the element blocks (useful for large
+% meshes where a single matvec takes a while). Default false. It can also
+% be enabled via img.fwd_model.jacobian_operator.progress = true.
 %
 % Returns a struct Jop with:
 %   Jop.size            -> [n_meas, n_elem], same shape J would have
@@ -34,20 +40,27 @@ function Jop = calc_jacobian_operator_mdeit(img)
 % This mirrors calc_jacobian_mdeit.m (same recon_mode dispatch, same
 % underlying math), re-organised for a matrix-free, memory-lean matvec.
 
+if nargin < 2 || isempty(progress)
+    progress = false;
+    try
+        progress = logical(img.fwd_model.jacobian_operator.progress);
+    end
+end
+
 recon_mode = check_recon_mode(img);
 
 switch recon_mode
     case 'mdeit1'
-        Jop = setup_operator_1axis(img);
+        Jop = setup_operator_1axis(img, progress);
     case 'mdeit3'
-        Jop = setup_operator_3axis(img);
+        Jop = setup_operator_3axis(img, progress);
 end
 
 end
 
 
 %% ------------------------------------------------------------------
-function Jop = setup_operator_1axis(img)
+function Jop = setup_operator_1axis(img, progress)
 
 mu0 = img.fwd_model.mu0;
 
@@ -102,22 +115,25 @@ mu_factor = mu0/(4*pi);
 
 chunk_size = get_chunk_size(img, num_sensors, n_elem);
 chunks = make_chunks(n_elem, chunk_size);
+nchunks = size(chunks,1);
 
 Jop.size = [num_sensors*num_stim, n_elem];
 
 Jop.mtimes = @(v) reshape( ...
     block_forward_matvec(v, G, lambda, Gxu,Gyu,Gzu, Rx,Ry,Rz, ...
-                         elemV, gx,gy,gz, mu_factor, chunks), [], 1);
+        elemV, gx,gy,gz, mu_factor, chunks, ...
+        make_progress(progress, nchunks, 'J*v')), [], 1);
 
 Jop.mtimes_transp = @(w) block_transp_matvec( ...
     reshape(w, num_sensors, num_stim), G, lambda, Gxu,Gyu,Gzu, ...
-    Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks, n_elem);
+    Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks, n_elem, ...
+    make_progress(progress, nchunks, 'J''*w'));
 
 end
 
 
 %% ------------------------------------------------------------------
-function Jop = setup_operator_3axis(img)
+function Jop = setup_operator_3axis(img, progress)
 
 mu0 = img.fwd_model.mu0;
 n_elem = size(img.fwd_model.elems,1);
@@ -181,6 +197,7 @@ end
 
 chunk_size = get_chunk_size(img, num_sensors, n_elem);
 chunks = make_chunks(n_elem, chunk_size);
+nchunks = size(chunks,1);
 
 nrow = num_sensors*num_stim;
 Jop.size = [3*nrow, n_elem];
@@ -190,23 +207,25 @@ Jop.mtimes_transp = @mtimes_transp_3axis;
 
     function Jv = mtimes_3axis(v)
         Jv = zeros(3*nrow,1);
+        tick = make_progress(progress, 3*nchunks, 'J*v');
         for k = 1:3
             Mk = block_forward_matvec(v, G, blocks(k).lambda, ...
                 Gxu,Gyu,Gzu, Rx,Ry,Rz, elemV, ...
                 blocks(k).gx, blocks(k).gy, blocks(k).gz, ...
-                mu_factor, chunks);
+                mu_factor, chunks, tick);
             Jv((k-1)*nrow+1:k*nrow) = Mk(:);
         end
     end
 
     function JtW = mtimes_transp_3axis(w)
         JtW = zeros(n_elem,1);
+        tick = make_progress(progress, 3*nchunks, 'J''*w');
         for k = 1:3
             Wk = reshape(w((k-1)*nrow+1:k*nrow), num_sensors, num_stim);
             JtW = JtW + block_transp_matvec(Wk, G, blocks(k).lambda, ...
                 Gxu,Gyu,Gzu, Rx,Ry,Rz, elemV, ...
                 blocks(k).gx, blocks(k).gy, blocks(k).gz, ...
-                mu_factor, chunks, n_elem);
+                mu_factor, chunks, n_elem, tick);
         end
     end
 
@@ -221,7 +240,7 @@ end
 % array is ever allocated.
 
 function M = block_forward_matvec(v, G, lambda, Gxu,Gyu,Gzu, ...
-                                  Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks)
+                                  Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks, tick)
 % Computes M = J_block * v as a [num_sensors x num_stim] matrix
 % (vectorize with M(:) to match calc_jacobian_mdeit's row ordering).
 %
@@ -260,13 +279,15 @@ for ci = 1:size(chunks,1)
     dCzdp = -Ryc*Gxuc + Rxc*Gyuc;
 
     M = M + mu_factor*( gx.*dCxdp + gy.*dCydp + gz.*dCzdp );
+
+    if ~isempty(tick), tick(); end
 end
 
 end
 
 
 function v_out = block_transp_matvec(W, G, lambda, Gxu,Gyu,Gzu, ...
-                                     Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks, n_elem)
+                                     Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks, n_elem, tick)
 % Computes v_out = J_block' * w, where W = reshape(w,num_sensors,num_stim).
 % Returns v_out as [n_elem x 1].
 
@@ -303,6 +324,8 @@ for ci = 1:size(chunks,1)
     dfdp_tc = mu_factor*(term1 + term2 + term3);
 
     v_out(c) = (dfdx_tc + dfdp_tc).';   % [|c| x 1]
+
+    if ~isempty(tick), tick(); end
 end
 
 end
@@ -328,6 +351,28 @@ function chunks = make_chunks(n_elem, chunk_size)
 starts = (1:chunk_size:n_elem).';
 ends   = min(starts + chunk_size - 1, n_elem);
 chunks = [starts ends];
+end
+
+function tick = make_progress(on, total, label)
+% Returns a per-chunk progress callback (or [] when disabled). Each call
+% advances a live \r counter; a newline + elapsed time is printed on the
+% final chunk. Matches the fprintf progress style used elsewhere in the
+% mDEIT solvers.
+if ~on
+    tick = [];
+    return
+end
+count = 0;
+t0 = tic;
+tick = @do_tick;
+    function do_tick()
+        count = count + 1;
+        fprintf('\r  Jop %s: block %d/%d (%3.0f%%)', ...
+                label, count, total, 100*count/total);
+        if count >= total
+            fprintf('  [%.1fs]\n', toc(t0));
+        end
+    end
 end
 
 

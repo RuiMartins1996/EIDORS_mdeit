@@ -79,6 +79,7 @@ function sol = solve_normal_equations(inv_model, dm)
 do_pcg = false;
 tol = 1e-4;
 maxit = size(dm, 1);
+jacobian_progress = false;   % live per-block counter inside J*v / J'*w matvecs
 
 if isfield(inv_model, 'inv_solve_core')
    if isfield(inv_model.inv_solve_core, 'do_pcg')
@@ -89,6 +90,9 @@ if isfield(inv_model, 'inv_solve_core')
    end
    if isfield(inv_model.inv_solve_core, 'maxit')
       maxit = inv_model.inv_solve_core.maxit;
+   end
+   if isfield(inv_model.inv_solve_core, 'jacobian_progress')
+      jacobian_progress = inv_model.inv_solve_core.jacobian_progress;
    end
 end
 
@@ -101,7 +105,7 @@ if do_pcg
    % Matrix-free operator: builds Gamma/forward/adjoint solves ONCE,
    % then hands back cheap J*v / J'*w closures. Neither J nor J'*J
    % is ever assembled.
-   Jop = calc_jacobian_operator_mdeit(img_bkgnd);
+   Jop = calc_jacobian_operator_mdeit(img_bkgnd, jacobian_progress);
 
    RtR = calc_RtR_prior(inv_model);
    hp  = calc_hyperparameter_mdeit(inv_model);
