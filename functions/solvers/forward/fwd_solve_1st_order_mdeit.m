@@ -216,19 +216,23 @@ function X = solve_reduced_system(E, RHS, fwd_model)
          end
          % Simple Jacobi preconditioner: M = L*U = diag(diag(E))
          L = sqrt(diag(diag(E))); U = L;
-         X = zeros(size(RHS,1), size(RHS,2));
+         nrhs  = size(RHS,2);
+         X     = zeros(size(RHS,1), nrhs);
+         flags = zeros(1, nrhs);
          % Right-hand sides are independent, so solve them in parallel.
          % Requires the Parallel Computing Toolbox; parfor falls back to a
          % serial loop if no pool is available.
-         parfor j = 1:size(RHS,2)
+         % NB: don't call eidors_msg inside parfor - it uses dbstack(s(2))
+         % which fails on workers. Collect flags and warn afterwards.
+         parfor j = 1:nrhs
             % Note: the standalone reference version passed tol*norm(RHS(:,j))
             % as the tolerance. We pass tol directly because pcg already
             % applies it relative to norm(b).
-            [X(:,j), flag] = pcg(E, RHS(:,j), tol, maxit, L, U);
-            if flag ~= 0
-               eidors_msg(['fwd_solve_1st_order_mdeit: pcg column %d ' ...
-                           'did not converge (flag %d)'], j, flag, 1);
-            end
+            [X(:,j), flags(j)] = pcg(E, RHS(:,j), tol, maxit, L, U);
+         end
+         for j = find(flags ~= 0)
+            eidors_msg(['fwd_solve_1st_order_mdeit: pcg column %d ' ...
+                        'did not converge (flag %d)'], j, flags(j), 1);
          end
       otherwise
          error('Unknown linear solver method: %s', method);
