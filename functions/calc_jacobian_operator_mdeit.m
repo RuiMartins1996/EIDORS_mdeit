@@ -8,11 +8,23 @@ function Jop = calc_jacobian_operator_mdeit(img)
 %   Jop.mtimes(v)        -> computes J*v          (v is n_elem x 1)
 %   Jop.mtimes_transp(w) -> computes J'*w         (w is n_meas x 1)
 %
-% Neither J nor J'*J is ever assembled. All the expensive one-off work
+% Neither J nor J'*J is ever assembled. The expensive one-off work
 % (Gamma matrices, forward solve u, adjoint solve lambda, factorisation)
-% is done ONCE when Jop is built; mtimes/mtimes_transp are then cheap
-% closures suitable for repeated calls inside an iterative solver
-% (pcg, lsqr, your own CG on the normal equations, etc).
+% is done ONCE when Jop is built; mtimes/mtimes_transp are then closures
+% suitable for repeated calls inside an iterative solver (pcg, lsqr, ...).
+%
+% MEMORY: unlike a naive assembly, this operator never forms a dense
+% [num_sensors x n_elem] array. The adjoint fields lambda are kept dense
+% ([n_nodes x num_sensors], ~5.5x smaller than a [num_sensors x n_elem]
+% factor for tetrahedral meshes), the gradient operators G.G{x,y,z} are
+% kept sparse, and the element contraction inside mtimes/mtimes_transp is
+% streamed in element blocks so a full [num_sensors x n_elem] temporary is
+% never allocated. This makes the operator usable on fine meshes where
+% the precomputed-factor form runs out of memory.
+%
+% The block size is chosen automatically to cap the size of the per-block
+% dense temporaries. Override it (in elements) with:
+%   img.fwd_model.jacobian_operator.chunk_size = 4000;
 %
 % Example - Gauss-Newton style normal-equations matvec with Tikhonov reg:
 %   Jop = calc_jacobian_operator_mdeit(img);
@@ -20,8 +32,7 @@ function Jop = calc_jacobian_operator_mdeit(img)
 %   dsigma = pcg(afun, Jop.mtimes_transp(residual), tol, maxit);
 %
 % This mirrors calc_jacobian_mdeit.m (same recon_mode dispatch, same
-% underlying math), just re-organised so the element contraction is done
-% via 2-D matrix products instead of broadcasting a 3-D array.
+% underlying math), re-organised for a matrix-free, memory-lean matvec.
 
 recon_mode = check_recon_mode(img);
 
@@ -68,18 +79,17 @@ rhs(end-num_electrodes+1:end,:) = I;
 u = solve_fact_multiple_rhs(F,rhs);
 u = u(1:end-num_electrodes,:);
 
-% Adjoint solve lambda for all sensors
+% Adjoint solve lambda for all sensors  ([n_nodes x num_sensors], dense)
 GammaT = Gamma.';
 rhs = sparse(n_nodes+num_electrodes,num_sensors);
 rhs(1:end-num_electrodes,:) = -GammaT;
 lambda = solve_fact_multiple_rhs(F,rhs);
 lambda = lambda(1:end-num_electrodes,:);
 
-% Pre-form the 2-D gradient factors (sensor x elem, stim x elem)
-GxL = (G.Gx*lambda).';  GyL = (G.Gy*lambda).';  GzL = (G.Gz*lambda).';
-GxU = (G.Gx*u).';       GyU = (G.Gy*u).';       GzU = (G.Gz*u).';
+% Small dense u-gradient factors ([n_elem x num_stim], num_stim is small).
+Gxu = G.Gx*u;  Gyu = G.Gy*u;  Gzu = G.Gz*u;
 
-Rx = R.Rx; Ry = R.Ry; Rz = R.Rz;      % [num_sensors x n_elem]
+Rx = R.Rx; Ry = R.Ry; Rz = R.Rz;      % sparse [num_sensors x n_elem]
 elemV = img.fwd_model.elem_volume(:); % [n_elem x 1]
 
 g = zeros(num_sensors,3);
@@ -90,15 +100,18 @@ gx = g(:,1); gy = g(:,2); gz = g(:,3);
 
 mu_factor = mu0/(4*pi);
 
+chunk_size = get_chunk_size(img, num_sensors, n_elem);
+chunks = make_chunks(n_elem, chunk_size);
+
 Jop.size = [num_sensors*num_stim, n_elem];
 
 Jop.mtimes = @(v) reshape( ...
-    block_forward_matvec(v, GxL,GyL,GzL, GxU,GyU,GzU, Rx,Ry,Rz, ...
-                          elemV, gx,gy,gz, mu_factor), [], 1);
+    block_forward_matvec(v, G, lambda, Gxu,Gyu,Gzu, Rx,Ry,Rz, ...
+                         elemV, gx,gy,gz, mu_factor, chunks), [], 1);
 
 Jop.mtimes_transp = @(w) block_transp_matvec( ...
-    reshape(w, num_sensors, num_stim), ...
-    GxL,GyL,GzL, GxU,GyU,GzU, Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor);
+    reshape(w, num_sensors, num_stim), G, lambda, Gxu,Gyu,Gzu, ...
+    Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks, n_elem);
 
 end
 
@@ -137,18 +150,17 @@ Ad1 = sparse(1:n_elec,1:n_elec,1./diag(Ad),n_elec,n_elec);
 A_reduced = Ac - Ae*Ad1*Aet;
 F = factorise_symmetric(A_reduced);
 
+% Adjoint fields, kept dense ([n_nodes x num_sensors] each)
 lambdaX = solve_fact_multiple_rhs(F, -Gamma1.');
 lambdaY = solve_fact_multiple_rhs(F, -Gamma2.');
 lambdaZ = solve_fact_multiple_rhs(F, -Gamma3.');
 
-GxU = (G.Gx*u).'; GyU = (G.Gy*u).'; GzU = (G.Gz*u).';
-Rx = R.Rx; Ry = R.Ry; Rz = R.Rz;
+% Small dense u-gradient factors ([n_elem x num_stim], num_stim is small)
+Gxu = G.Gx*u;  Gyu = G.Gy*u;  Gzu = G.Gz*u;
+
+Rx = R.Rx; Ry = R.Ry; Rz = R.Rz;      % sparse [num_sensors x n_elem]
 elemV = img.fwd_model.elem_volume(:);
 mu_factor = mu0/(4*pi);
-
-GxLX=(G.Gx*lambdaX).'; GyLX=(G.Gy*lambdaX).'; GzLX=(G.Gz*lambdaX).';
-GxLY=(G.Gx*lambdaY).'; GyLY=(G.Gy*lambdaY).'; GzLY=(G.Gz*lambdaY).';
-GxLZ=(G.Gx*lambdaZ).'; GyLZ=(G.Gy*lambdaZ).'; GzLZ=(G.Gz*lambdaZ).';
 
 g = zeros(num_sensors,3,3);
 for m = 1:num_sensors
@@ -158,19 +170,17 @@ for m = 1:num_sensors
         img.fwd_model.sensors(m).axes.axis3];
 end
 
-GxL_all = {GxLX,GxLY,GxLZ};
-GyL_all = {GyLX,GyLY,GyLZ};
-GzL_all = {GzLX,GzLY,GzLZ};
-
-blocks = struct('GxL',{},'GyL',{},'GzL',{},'gx',{},'gy',{},'gz',{});
+lambdas = {lambdaX, lambdaY, lambdaZ};
+blocks = struct('lambda',{},'gx',{},'gy',{},'gz',{});
 for k = 1:3
-    blocks(k).GxL = GxL_all{k};
-    blocks(k).GyL = GyL_all{k};
-    blocks(k).GzL = GzL_all{k};
-    blocks(k).gx  = g(:,k,1);
-    blocks(k).gy  = g(:,k,2);
-    blocks(k).gz  = g(:,k,3);
+    blocks(k).lambda = lambdas{k};
+    blocks(k).gx = g(:,k,1);
+    blocks(k).gy = g(:,k,2);
+    blocks(k).gz = g(:,k,3);
 end
+
+chunk_size = get_chunk_size(img, num_sensors, n_elem);
+chunks = make_chunks(n_elem, chunk_size);
 
 nrow = num_sensors*num_stim;
 Jop.size = [3*nrow, n_elem];
@@ -181,10 +191,10 @@ Jop.mtimes_transp = @mtimes_transp_3axis;
     function Jv = mtimes_3axis(v)
         Jv = zeros(3*nrow,1);
         for k = 1:3
-            Mk = block_forward_matvec(v, ...
-                blocks(k).GxL, blocks(k).GyL, blocks(k).GzL, ...
-                GxU,GyU,GzU, Rx,Ry,Rz, elemV, ...
-                blocks(k).gx, blocks(k).gy, blocks(k).gz, mu_factor);
+            Mk = block_forward_matvec(v, G, blocks(k).lambda, ...
+                Gxu,Gyu,Gzu, Rx,Ry,Rz, elemV, ...
+                blocks(k).gx, blocks(k).gy, blocks(k).gz, ...
+                mu_factor, chunks);
             Jv((k-1)*nrow+1:k*nrow) = Mk(:);
         end
     end
@@ -193,10 +203,10 @@ Jop.mtimes_transp = @mtimes_transp_3axis;
         JtW = zeros(n_elem,1);
         for k = 1:3
             Wk = reshape(w((k-1)*nrow+1:k*nrow), num_sensors, num_stim);
-            JtW = JtW + block_transp_matvec(Wk, ...
-                blocks(k).GxL, blocks(k).GyL, blocks(k).GzL, ...
-                GxU,GyU,GzU, Rx,Ry,Rz, elemV, ...
-                blocks(k).gx, blocks(k).gy, blocks(k).gz, mu_factor);
+            JtW = JtW + block_transp_matvec(Wk, G, blocks(k).lambda, ...
+                Gxu,Gyu,Gzu, Rx,Ry,Rz, elemV, ...
+                blocks(k).gx, blocks(k).gy, blocks(k).gz, ...
+                mu_factor, chunks, n_elem);
         end
     end
 
@@ -204,67 +214,120 @@ end
 
 
 %% ==================== CORE CONTRACTION KERNELS =====================
-% These two functions are the whole trick: instead of forming a
-% [num_sensors x num_stim x n_elem] array and multiplying by v (or w)
-% along the elem dimension, we contract over elements using 2-D
-% matrix products. Same FLOP count as one Jacobian assembly, but no
-% 3-D array (and no J, no J'*J) is ever formed.
+% Same math as calc_jacobian_mdeit, but the contraction over elements is
+% streamed in blocks. For each block c we form only the small dense
+% [num_sensors x numel(c)] factor grad(lambda)|_c on the fly from the
+% sparse G.G{x,y,z} and the dense lambda, so no [num_sensors x n_elem]
+% array is ever allocated.
 
-function M = block_forward_matvec(v, GxL,GyL,GzL, GxU,GyU,GzU, ...
-                                   Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor)
+function M = block_forward_matvec(v, G, lambda, Gxu,Gyu,Gzu, ...
+                                  Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks)
 % Computes M = J_block * v as a [num_sensors x num_stim] matrix
 % (vectorize with M(:) to match calc_jacobian_mdeit's row ordering).
 %
-%   v      : [n_elem x 1]   perturbation direction
-%   GxL... : [num_sensors x n_elem]   G.G{x,y,z}*lambda, transposed
-%   GxU... : [num_stim    x n_elem]   G.G{x,y,z}*u,      transposed
-%   Rx,Ry,Rz: [num_sensors x n_elem]
+%   v      : [n_elem x 1]              perturbation direction
+%   lambda : [n_nodes x num_sensors]   adjoint field (dense)
+%   Gxu... : [n_elem x num_stim]       G.G{x,y,z}*u
+%   Rx,Ry,Rz: [num_sensors x n_elem]   (sparse)
 %   elemV  : [n_elem x 1]
-%   gx,gy,gz: [num_sensors x 1]  sensor-axis components for this block
+%   gx,gy,gz: [num_sensors x 1]        sensor-axis components for this block
 
-vE = (v(:).' .* elemV(:).');   % element weight incl. volume, for dfdx
-vR =  v(:).';                 % element weight, no volume,   for dfdp
+Gx = G.Gx; Gy = G.Gy; Gz = G.Gz;
+num_sensors = size(lambda,2);
+num_stim    = size(Gxu,2);
+M = zeros(num_sensors, num_stim);
 
-% --- conductivity term: elemV * (grad(lambda) . grad(u)) ---
-M = (GxL.*vE)*GxU.' + (GyL.*vE)*GyU.' + (GzL.*vE)*GzU.';
+for ci = 1:size(chunks,1)
+    c = chunks(ci,1):chunks(ci,2);
 
-% --- position term: mu_factor * g . (R x grad(u)) ---
-Rx_v = Rx.*vR;  Ry_v = Ry.*vR;  Rz_v = Rz.*vR;
+    % grad(lambda) on this block, [num_sensors x |c|]
+    GxLc = (Gx(c,:)*lambda).';
+    GyLc = (Gy(c,:)*lambda).';
+    GzLc = (Gz(c,:)*lambda).';
 
-dCxdp = -Rz_v*GyU.' + Ry_v*GzU.';
-dCydp = -Rx_v*GzU.' + Rz_v*GxU.';
-dCzdp = -Ry_v*GxU.' + Rx_v*GyU.';
+    Gxuc = Gxu(c,:);  Gyuc = Gyu(c,:);  Gzuc = Gzu(c,:);  % [|c| x num_stim]
 
-M = M + mu_factor*( gx.*dCxdp + gy.*dCydp + gz.*dCzdp );
+    % --- conductivity term: elemV * (grad(lambda) . grad(u)) ---
+    vEc = (v(c).' .* elemV(c).');       % [1 x |c|]
+    M = M + (GxLc.*vEc)*Gxuc + (GyLc.*vEc)*Gyuc + (GzLc.*vEc)*Gzuc;
+
+    % --- position term: mu_factor * g . (R x grad(u)) ---
+    vRc = v(c).';                       % [1 x |c|]
+    Rxc = Rx(:,c).*vRc;  Ryc = Ry(:,c).*vRc;  Rzc = Rz(:,c).*vRc;
+
+    dCxdp = -Rzc*Gyuc + Ryc*Gzuc;
+    dCydp = -Rxc*Gzuc + Rzc*Gxuc;
+    dCzdp = -Ryc*Gxuc + Rxc*Gyuc;
+
+    M = M + mu_factor*( gx.*dCxdp + gy.*dCydp + gz.*dCzdp );
+end
 
 end
 
 
-function v_out = block_transp_matvec(W, GxL,GyL,GzL, GxU,GyU,GzU, ...
-                                      Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor)
+function v_out = block_transp_matvec(W, G, lambda, Gxu,Gyu,Gzu, ...
+                                     Rx,Ry,Rz, elemV, gx,gy,gz, mu_factor, chunks, n_elem)
 % Computes v_out = J_block' * w, where W = reshape(w,num_sensors,num_stim).
 % Returns v_out as [n_elem x 1].
 
-% --- conductivity term ---
-WUx = W*GxU;  WUy = W*GyU;  WUz = W*GzU;   % [num_sensors x n_elem]
+Gx = G.Gx; Gy = G.Gy; Gz = G.Gz;
+v_out = zeros(n_elem,1);
 
-dfdx_t = elemV(:).' .* sum(GxL.*WUx + GyL.*WUy + GzL.*WUz, 1); % [1 x n_elem]
-
-% --- position term ---
 Wg1 = W.*gx;  Wg2 = W.*gy;  Wg3 = W.*gz;   % [num_sensors x num_stim]
 
-A1 = Wg1*GyU;  B1 = Wg1*GzU;
-A2 = Wg2*GzU;  B2 = Wg2*GxU;
-A3 = Wg3*GxU;  B3 = Wg3*GyU;
+for ci = 1:size(chunks,1)
+    c = chunks(ci,1):chunks(ci,2);
 
-term1 = -sum(Rz.*A1,1) + sum(Ry.*B1,1);
-term2 = -sum(Rx.*A2,1) + sum(Rz.*B2,1);
-term3 = -sum(Ry.*A3,1) + sum(Rx.*B3,1);
+    Gxuc = Gxu(c,:);  Gyuc = Gyu(c,:);  Gzuc = Gzu(c,:);  % [|c| x num_stim]
 
-dfdp_t = mu_factor*(term1 + term2 + term3);
+    % --- conductivity term ---
+    WUxc = W*Gxuc.';  WUyc = W*Gyuc.';  WUzc = W*Gzuc.';   % [num_sensors x |c|]
 
-v_out = (dfdx_t + dfdp_t).';   % [n_elem x 1]
+    GxLc = (Gx(c,:)*lambda).';
+    GyLc = (Gy(c,:)*lambda).';
+    GzLc = (Gz(c,:)*lambda).';
 
+    dfdx_tc = elemV(c).' .* sum(GxLc.*WUxc + GyLc.*WUyc + GzLc.*WUzc, 1); % [1 x |c|]
+
+    % --- position term ---
+    A1c = Wg1*Gyuc.';  B1c = Wg1*Gzuc.';
+    A2c = Wg2*Gzuc.';  B2c = Wg2*Gxuc.';
+    A3c = Wg3*Gxuc.';  B3c = Wg3*Gyuc.';
+
+    Rxc = Rx(:,c);  Ryc = Ry(:,c);  Rzc = Rz(:,c);
+
+    term1 = -sum(Rzc.*A1c,1) + sum(Ryc.*B1c,1);
+    term2 = -sum(Rxc.*A2c,1) + sum(Rzc.*B2c,1);
+    term3 = -sum(Ryc.*A3c,1) + sum(Rxc.*B3c,1);
+
+    dfdp_tc = mu_factor*(term1 + term2 + term3);
+
+    v_out(c) = (dfdx_tc + dfdp_tc).';   % [|c| x 1]
+end
+
+end
+
+
+%% ==================== BLOCKING HELPERS =============================
+
+function chunk_size = get_chunk_size(img, num_sensors, n_elem)
+% Element block size. Caps the per-block dense temporary
+% (~[num_sensors x chunk_size]) at ~64 MB unless overridden.
+chunk_size = [];
+try
+    chunk_size = img.fwd_model.jacobian_operator.chunk_size;
+end
+if isempty(chunk_size)
+    budget_bytes = 64e6;
+    chunk_size = floor(budget_bytes / (8*max(num_sensors,1)));
+end
+chunk_size = max(1, min(chunk_size, n_elem));
+end
+
+function chunks = make_chunks(n_elem, chunk_size)
+starts = (1:chunk_size:n_elem).';
+ends   = min(starts + chunk_size - 1, n_elem);
+chunks = [starts ends];
 end
 
 
