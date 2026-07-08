@@ -214,11 +214,14 @@ function X = solve_reduced_system(E, RHS, fwd_model)
          if isfield(fwd_model,'solve_mdeit') && isfield(fwd_model.solve_mdeit,'maxit')
             maxit = fwd_model.solve_mdeit.maxit;
          end
-         % Simple Jacobi preconditioner: M = L*U = diag(diag(E))
-         L = sqrt(diag(diag(E))); U = L;
          nrhs  = size(RHS,2);
          X     = zeros(size(RHS,1), nrhs);
          flags = zeros(1, nrhs);
+         % Progress counter: parfor completes out of order, so tick a
+         % client-side counter as each RHS finishes via a DataQueue.
+         pcg_progress('reset', nrhs);
+         dq = parallel.pool.DataQueue;
+         afterEach(dq, @(~) pcg_progress('tick'));
          % Right-hand sides are independent, so solve them in parallel.
          % Requires the Parallel Computing Toolbox; parfor falls back to a
          % serial loop if no pool is available.
@@ -228,7 +231,8 @@ function X = solve_reduced_system(E, RHS, fwd_model)
             % Note: the standalone reference version passed tol*norm(RHS(:,j))
             % as the tolerance. We pass tol directly because pcg already
             % applies it relative to norm(b).
-            [X(:,j), flags(j)] = pcg(E, RHS(:,j), tol, maxit, L, U);
+            [X(:,j), flags(j)] = pcg(E, RHS(:,j), tol, maxit);
+            send(dq, j);
          end
          for j = find(flags ~= 0)
             eidors_msg(['fwd_solve_1st_order_mdeit: pcg column %d ' ...
@@ -236,6 +240,21 @@ function X = solve_reduced_system(E, RHS, fwd_model)
          end
       otherwise
          error('Unknown linear solver method: %s', method);
+   end
+
+% Client-side progress counter for the pcg solves. State is kept in
+% persistent variables; call with 'reset' before the loop and 'tick'
+% (via the DataQueue afterEach callback) as each RHS completes.
+function pcg_progress(action, total)
+   persistent count ntot
+   switch action
+      case 'reset'
+         count = 0; ntot = total;
+      case 'tick'
+         count = count + 1;
+         fprintf('\r  pcg: solved %d/%d RHS (%3.0f%%)', ...
+                 count, ntot, 100*count/ntot);
+         if count >= ntot; fprintf('\n'); end
    end
 
 function [E, m_idx, pp] = mdl_reduction(E, mr, img, pp);
