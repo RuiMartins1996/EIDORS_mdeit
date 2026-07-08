@@ -217,7 +217,10 @@ function X = solve_reduced_system(E, RHS, fwd_model)
          % Simple Jacobi preconditioner: M = L*U = diag(diag(E))
          L = sqrt(diag(diag(E))); U = L;
          X = zeros(size(RHS,1), size(RHS,2));
-         for j = 1:size(RHS,2)
+         % Right-hand sides are independent, so solve them in parallel.
+         % Requires the Parallel Computing Toolbox; parfor falls back to a
+         % serial loop if no pool is available.
+         parfor j = 1:size(RHS,2)
             % Note: the standalone reference version passed tol*norm(RHS(:,j))
             % as the tolerance. We pass tol directly because pcg already
             % applies it relative to norm(b).
