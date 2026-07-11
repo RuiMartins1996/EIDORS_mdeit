@@ -216,7 +216,14 @@ function X = solve_reduced_system(E, RHS, fwd_model)
          end
          nrhs  = size(RHS,2);
          X     = zeros(size(RHS,1), nrhs);
-         flags = zeros(1, nrhs);
+
+         % Incomplete-Cholesky preconditioner. E (ground node removed) is
+         % symmetric positive-definite, so ichol makes CG converge in far
+         % fewer iterations. Without it, unpreconditioned CG stalls on large
+         % (fine-mesh) systems and returns a residual larger than the small
+         % B-field difference used for difference imaging -> speckle noise.
+         % Built once here (same E for every RHS) and reused by all workers.
+         Lic = build_ichol(E);
          % Progress counter: parfor completes out of order, so tick a
          % client-side counter as each RHS finishes via a DataQueue.
          pcg_progress('reset', nrhs);
@@ -226,18 +233,30 @@ function X = solve_reduced_system(E, RHS, fwd_model)
          % Requires the Parallel Computing Toolbox; parfor falls back to a
          % serial loop if no pool is available.
          % NB: don't call eidors_msg inside parfor - it uses dbstack(s(2))
-         % which fails on workers. Collect flags and warn afterwards.
+         % which fails on workers. error() is safe: it aborts the loop and
+         % rethrows on the client.
          parfor j = 1:nrhs
             % Note: the standalone reference version passed tol*norm(RHS(:,j))
             % as the tolerance. We pass tol directly because pcg already
             % applies it relative to norm(b).
-            [X(:,j), flags(j)] = pcg(E, RHS(:,j), tol, maxit);
+            [X(:,j), flag, relres, iters] = ...
+               pcg(E, RHS(:,j), tol, maxit, Lic, Lic');
+
+            % Fail loudly. A non-converged solve corrupts the difference
+            % signal dm = datai.meas - datah.meas (a small difference of two
+            % large fields), so the reconstruction would silently degrade to
+            % noise. Stop here rather than return garbage.
+            if flag ~= 0
+                error(['fwd_solve_1st_order_mdeit: pcg column %d did not ' ...
+                    'converge (flag %d, relres %.2e, %d iters, maxit %d). ' ...
+                    'Increase solve_mdeit.maxit or tighten the ' ...
+                    'preconditioner.'], j, flag, relres, iters, maxit);
+            end
+
             send(dq, j);
          end
-         for j = find(flags ~= 0)
-            eidors_msg(['fwd_solve_1st_order_mdeit: pcg column %d ' ...
-                        'did not converge (flag %d)'], j, flags(j), 1);
-         end
+         eidors_msg(['fwd_solve_1st_order_mdeit: pcg converged for all %d ' ...
+            'RHS (tol %.2e, maxit %d)'], nrhs, tol, maxit, 2);
       otherwise
          error('Unknown linear solver method: %s', method);
    end
@@ -256,6 +275,39 @@ function pcg_progress(action, total)
                  count, ntot, 100*count/ntot);
          if count >= ntot; fprintf('\n'); end
    end
+
+% Incomplete-Cholesky factor used as a symmetric preconditioner (M = L*L')
+% for pcg. E is SPD (ground node removed), but ill-scaling can make ichol
+% encounter a non-positive pivot; retry with an increasing diagonal shift
+% (diagcomp) until it succeeds, then fall back to no preconditioner.
+function Lic = build_ichol(E)
+   % A modest drop tolerance keeps the factor sparse (fits in memory where a
+   % full direct factorization does not) while still accelerating CG well.
+   base_opts = struct('type','ict','droptol',1e-3,'michol','on');
+   % Heuristic starting shift (Manteuffel): 0 unless the matrix needs it.
+   alpha = 0;
+   fprintf('fwd_solve_1st_order_mdeit: Building iChol preconditioner\n');
+   for attempt = 1:8
+      opts = base_opts; opts.diagcomp = alpha;
+      try
+         Lic = ichol(E, opts);
+         return
+      catch
+         if alpha == 0
+            % First failure: seed a shift from the diagonal dominance ratio.
+            dg = full(diag(E));
+            alpha = max( max(sum(abs(E),2)./max(dg,eps)) - 2, 1e-4 );
+         else
+            alpha = alpha * 2;   % escalate
+         end
+      end
+   end
+   % Could not build a factor: fall back to unpreconditioned CG. pcg accepts
+   % [] as "no preconditioner"; the convergence check downstream still guards
+   % against a bad solve.
+   eidors_msg(['fwd_solve_1st_order_mdeit: ichol preconditioner failed; ' ...
+      'falling back to unpreconditioned pcg'], 1);
+   Lic = [];
 
 function [E, m_idx, pp] = mdl_reduction(E, mr, img, pp);
    % if mr is a string we assume it's a function name
