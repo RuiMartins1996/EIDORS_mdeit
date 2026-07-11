@@ -108,14 +108,8 @@ imgr_eit = inv_solve(imdl,datah_eit,datai_eit);
 
 
 %% MDEIT solve
-% Use GCV to find the optimal hyperparameter
-% imdl.hyperparameter.func = @gcv;
-if isfield(imdl.hyperparameter,'func')
-    imdl.hyperparameter = rmfield(imdl.hyperparameter,'func');
-end
+
 imdl.hyperparameter.value = 0.0005;
-% Use pcg solve
-% imdl.inv_solve_core.do_pcg = true;
 
 imgr_mdeit = inv_solve_diff_GN_one_step_mdeit(imdl, datah_mdeit, datai_mdeit);
 

@@ -139,58 +139,16 @@ for rhs_idx = 1:n_rhs
          % PCG converged successfully
       case 1
          % PCG did not converge within the maximum number of iterations
-         warning(sprintf(['inv_solve_diff_GN_one_step_mdeit:pcg exceeded maximum iterations without converging' ...
-                        '(relres=%g, iter=%d)'],relres, iter));
+         warning('inv_solve_diff_GN_one_step_mdeit:pcg exceeded maximum iterations without converging (relres=%g, iter=%d)', relres, iter);
       case 2
          % The preconditioner matrix M or M = M1*M2 is ill conditioned.
-         warning(sprintf(['inv_solve_diff_GN_one_step_mdeit:pcg preconditioner is ill conditioned' ...
-                        '(relres=%g, iter=%d)'],relres, iter));
+         warning('inv_solve_diff_GN_one_step_mdeit:pcg preconditioner is ill conditioned (relres=%g, iter=%d)', relres, iter);
       case 3
          % PCG stagnated
-         warning(sprintf(['inv_solve_diff_GN_one_step_mdeit:pcg stagnated' ...
-                        '(relres=%g, iter=%d)'],relres, iter));
+         warning('inv_solve_diff_GN_one_step_mdeit:pcg stagnated (relres=%g, iter=%d)', relres, iter);
       case 4
          % One of the scalar quantities calculated during PCG became too small or too large to continue computing.
-         error(sprintf(['inv_solve_diff_GN_one_step_mdeit:pcg scalar quantity too small or too large' ...
-                        '(relres=%g, iter=%d)'],relres, iter));
+         error('inv_solve_diff_GN_one_step_mdeit:pcg scalar quantity too small or too large (relres=%g, iter=%d)',relres, iter);
    end
 end
-end
-
-function [img, step_size] = scale_to_fit_data(img, inv_model, data1, data2)
-   % find the step size to multiply sol by to best fit data
-   step_size = 1;
-   do_step   = false;
-   % If calc_step_size, ignore specified step_size
-   try do_step = inv_model.inv_solve_diff_GN_one_step.calc_step_size; end
-
-   if do_step
-      eidors_msg('inv_solve_diff_GN_one_step: Calculating optimal step size to fit data',2);
-      % options for fminbnd
-      try 
-         opt = inv_model.inv_solve_diff_GN_one_step.fminbnd;
-      catch
-         opt.Display = 'iter';
-      end
-      % range for fminbnd
-      try
-         range = inv_model.inv_solve_diff_GN_one_step.bounds;
-      catch
-         range = [1e-5 1e1];
-      end
-      step_size = fminbnd(@(x) to_optimize(img,inv_model,data1,data2, x), ...
-                           range(1), range(2), opt);
-   else
-      % if not calculating, check if step_size provided
-      try
-         step_size = inv_model.inv_solve_diff_GN_one_step.step_size;
-      end
-   end
-   img.elem_data = img.elem_data * step_size;
-   img.info.step_size = step_size;
-end
-
-function out = to_optimize(img, inv_model, data1, data2, x)
-   img.elem_data = img.elem_data*x;
-   out = calc_solution_error(img, inv_model, data1, data2);
 end

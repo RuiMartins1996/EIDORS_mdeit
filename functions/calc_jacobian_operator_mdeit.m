@@ -146,14 +146,15 @@ R = img.fwd_model.R;
 G = img.fwd_model.G;
 Gamma1 = img.Gamma1; Gamma2 = img.Gamma2; Gamma3 = img.Gamma3;
 
-% Forward solve u (shared across all 3 blocks)
+% Forward solve u (shared across all 3 blocks) and grab the system matrix
+% in the same call - fwd_solve_sys_mat_mdeit assembles it only once.
 img.fwd_solve.get_all_meas = 1;
-u = fwd_solve(img);
-u = u.volt;
+skip_mag_field = true;  % always compute the magnetic field for the Jacobian
+[data, A_matrix] = fwd_solve_sys_mat_mdeit(img, skip_mag_field);
+u = data.volt;
 
 % Build reduced (electrode-eliminated) system matrix, same as
 % calc_jacobian_3axis, and factorise once for the 3 adjoint solves
-A_matrix = lhs_eit_full(img);
 n_nodes = size(img.fwd_model.nodes,1);
 n_elec  = numel(img.fwd_model.electrode);
 

@@ -141,16 +141,16 @@ Gamma1 = img.Gamma1;
 Gamma2 = img.Gamma2;
 Gamma3 = img.Gamma3;
 
-% Compute EIT forward solution for each current injection pattern
+% Compute EIT forward solution for each current injection pattern, and
+% grab the system matrix from the same call so system_mat_1st_order is
+% assembled only once.
 img.fwd_solve.get_all_meas = 1;
-u = fwd_solve(img);
-u = u.volt;
+[data, A_matrix] = fwd_solve_sys_mat_mdeit(img);
+u = data.volt;
 
 Gamma1T = Gamma1.';
 Gamma2T = Gamma2.';
 Gamma3T = Gamma3.';
-
-A_matrix = lhs_eit_full(img);
 
 n_elec = numel(img.fwd_model.electrode);
 Ac = A_matrix(1:size(img.fwd_model.nodes,1),1:size(img.fwd_model.nodes,1));

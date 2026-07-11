@@ -1,11 +1,20 @@
-function data = fwd_solve_1st_order_mdeit(img)
+function [data, s_mat_E] = fwd_solve_1st_order_mdeit(img, skip_mag_field)
 % FWD_SOLVE_1ST_ORDER: data= fwd_solve_1st_order( img)
 % First order FEM forward solver
 % Input:
 %    img       = image struct
 %    select_sensor_axis = indices of sensor axes to use
+%    skip_mag_field = (optional) when true, skip the magnetic field
+%              computation: compute_gamma_matrices is not called and
+%              data.meas is returned empty. Useful for callers that only
+%              need the FEM node solution (data.volt) and/or the system
+%              matrix. Defaults to false.
 % Output:
-%    data = measurements struct
+%    data    = measurements struct
+%    s_mat_E = (optional) full FEM system matrix, identical to
+%              lhs_eit_full(img). Returned so callers that also need the
+%              system matrix (e.g. the Jacobian solvers) can obtain it here
+%              without a second call to system_mat_1st_order.
 % Options: (to return internal FEM information)
 %    img.fwd_solve.get_all_meas = 1 (data.volt = all FEM nodes, but not CEM)
 %    img.fwd_solve.get_all_nodes= 1 (data.volt = all nodes, including CEM)
@@ -28,6 +37,10 @@ function data = fwd_solve_1st_order_mdeit(img)
 
 % correct input paralemeters if function was called with only img
 
+if nargin < 2 || isempty(skip_mag_field)
+    skip_mag_field = false;
+end
+
 fwd_model= img.fwd_model;
 
 img = data_mapper(img);
@@ -41,6 +54,10 @@ img = convert_img_units(img, 'conductivity');
 pp= fwd_model_parameters( fwd_model, 'skip_VOLUME' );
 pp = set_gnd_node(fwd_model, pp);
 s_mat= calc_system_mat( img );
+
+% Full FEM system matrix, captured before any model reduction so that it
+% matches lhs_eit_full(img). Returned as the optional 2nd output.
+s_mat_E = s_mat.E;
 
 if isfield(fwd_model,'model_reduction')
    [s_mat.E, main_idx, pp] = mdl_reduction(s_mat.E, ...
@@ -78,34 +95,40 @@ if has_gnd_node
    end
 end
 
-%% Calculate the magnetic field on magnetometers 
+%% Calculate the magnetic field on magnetometers
 
-img = compute_gamma_matrices(img);
-
-u = v(1:size(img.fwd_model.nodes,1),:);
-
-% Check which reconstruction mode is being used based on the sensor axes fields
-if isfield(img.fwd_model.sensors(1).axes, 'axis')
-    recon_mode = 'mdeit1';
-elseif isfield(img.fwd_model.sensors(1).axes, 'axis1') && ...
-       isfield(img.fwd_model.sensors(1).axes, 'axis2') && ...
-       isfield(img.fwd_model.sensors(1).axes, 'axis3')
-    recon_mode = 'mdeit3';
+if skip_mag_field
+   % Caller only wants the FEM solution (data.volt) and/or system matrix;
+   % skip compute_gamma_matrices and leave the measurements empty.
+   B = [];
 else
-    error('Unknown sensor axes configuration. Please check the sensor axes fields.');
-end
+   img = compute_gamma_matrices(img);
 
-switch recon_mode
-   case 'mdeit1'
-      B = img.Gamma*u; % Measurement in the sensor axis direction for every sensor for every stimulation pattern
-      B = B(:); % Flatten the matrix into a vector
-   case 'mdeit3'
-        Bx = img.Gamma1*u; % Measurement in axis1 direction for every sensor for every stimulation pattern
-        By = img.Gamma2*u;
-        Bz = img.Gamma3*u;
-        B = [Bx(:); By(:); Bz(:)];
-   otherwise
-        error('Unknown reconstruction mode: %s', recon_mode);
+   u = v(1:size(img.fwd_model.nodes,1),:);
+
+   % Check which reconstruction mode is being used based on the sensor axes fields
+   if isfield(img.fwd_model.sensors(1).axes, 'axis')
+       recon_mode = 'mdeit1';
+   elseif isfield(img.fwd_model.sensors(1).axes, 'axis1') && ...
+          isfield(img.fwd_model.sensors(1).axes, 'axis2') && ...
+          isfield(img.fwd_model.sensors(1).axes, 'axis3')
+       recon_mode = 'mdeit3';
+   else
+       error('Unknown sensor axes configuration. Please check the sensor axes fields.');
+   end
+
+   switch recon_mode
+      case 'mdeit1'
+         B = img.Gamma*u; % Measurement in the sensor axis direction for every sensor for every stimulation pattern
+         B = B(:); % Flatten the matrix into a vector
+      case 'mdeit3'
+           Bx = img.Gamma1*u; % Measurement in axis1 direction for every sensor for every stimulation pattern
+           By = img.Gamma2*u;
+           Bz = img.Gamma3*u;
+           B = [Bx(:); By(:); Bz(:)];
+      otherwise
+           error('Unknown reconstruction mode: %s', recon_mode);
+   end
 end
 
 % calc voltage on electrodes
