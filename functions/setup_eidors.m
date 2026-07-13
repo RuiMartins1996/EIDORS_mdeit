@@ -59,25 +59,38 @@ end
 end
 
 function eidors_folder = find_eidors_folder(start_folder)
-% helper: searches upward for a folder containing "eidors" in its name
+% helper: searches upward for a folder containing "eidors" in its name.
+% At each ancestor level, both that level's children AND grandchildren are
+% checked (e.g. .../Scripts/eidors-v3.12-ng is a grandchild when starting
+% from .../EIDORS_mdeit/tests, since eidors-v3.12-ng sits under the sibling
+% folder "Scripts", not directly under a common ancestor).
 
     max_levels = 5;
     current = start_folder;
 
     for k = 1:max_levels
 
-        % List subfolders
-        d = dir(current);
-        isub = [d.isdir];
-        subdirs = {d(isub).name};
-        subdirs = subdirs(~ismember(subdirs,{'.','..'}));
+        candidates = list_subdirs(current);
+        grandchildren = {};
+        for i = 1:numel(candidates)
+            grandchildren = [grandchildren, list_subdirs(candidates{i})]; %#ok<AGROW>
+        end
+        candidates = [candidates, grandchildren];
 
-        % Look for "*eidors*" (case-insensitive)
-        idx = find(contains(lower(subdirs), 'eidors'));
+        % Look for "*eidors*" (case-insensitive) among candidates. A name
+        % match alone is not enough: "EIDORS_mdeit" (this project's own
+        % folder) also contains "eidors" and can shadow the real EIDORS
+        % install if it happens to sort earlier than "Scripts". Require the
+        % candidate to actually contain eidors/startup.m.
+        [~,names] = cellfun(@fileparts, candidates, 'UniformOutput', false);
+        idx = find(contains(lower(names), 'eidors'));
 
-        if ~isempty(idx)
-            eidors_folder = fullfile(current, subdirs{idx(1)});
-            return;
+        for k2 = 1:numel(idx)
+            candidate = candidates{idx(k2)};
+            if exist(fullfile(candidate, 'eidors', 'startup.m'), 'file')
+                eidors_folder = candidate;
+                return;
+            end
         end
 
         % Move one level up
@@ -90,6 +103,14 @@ function eidors_folder = find_eidors_folder(start_folder)
 
     % Nothing found
     eidors_folder = '';
+end
+
+function subdirs = list_subdirs(folder)
+    d = dir(folder);
+    isub = [d.isdir];
+    names = {d(isub).name};
+    names = names(~ismember(names,{'.','..'}));
+    subdirs = cellfun(@(n) fullfile(folder,n), names, 'UniformOutput', false);
 end
 
 

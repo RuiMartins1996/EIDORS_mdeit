@@ -51,9 +51,15 @@ end
 % all calcs use conductivity
 img = convert_img_units(img, 'conductivity');
 
-pp= fwd_model_parameters( fwd_model, 'skip_VOLUME' );
-pp = set_gnd_node(fwd_model, pp);
-s_mat= calc_system_mat( img );
+% Lean copy for the EIDORS-cached calls below: see MDEIT_LEAN_IMG. Without
+% this, every cache lookup MD5-hashes fmdl.R (dense n_sensors x n_elem) and
+% the cache costs more than it saves.
+img_lean  = mdeit_lean_img(img);
+fmdl_lean = img_lean.fwd_model;
+
+pp    = fwd_model_parameters( fmdl_lean, 'skip_VOLUME' );
+pp    = set_gnd_node(fmdl_lean, pp);
+s_mat = calc_system_mat( img_lean );
 
 % Full FEM system matrix, captured before any model reduction so that it
 % matches lhs_eit_full(img). Returned as the optional 2nd output.
@@ -99,35 +105,42 @@ end
 
 if skip_mag_field
    % Caller only wants the FEM solution (data.volt) and/or system matrix;
-   % skip compute_gamma_matrices and leave the measurements empty.
+   % skip the magnetic field computation and leave the measurements empty.
    B = [];
 else
-   img = compute_gamma_matrices(img);
-
    u = v(1:size(img.fwd_model.nodes,1),:);
 
-   % Check which reconstruction mode is being used based on the sensor axes fields
-   if isfield(img.fwd_model.sensors(1).axes, 'axis')
-       recon_mode = 'mdeit1';
-   elseif isfield(img.fwd_model.sensors(1).axes, 'axis1') && ...
-          isfield(img.fwd_model.sensors(1).axes, 'axis2') && ...
-          isfield(img.fwd_model.sensors(1).axes, 'axis3')
-       recon_mode = 'mdeit3';
+   if use_matrix_free(img)
+      % Never form Gamma: apply R, Sigma and G to u right-to-left instead.
+      % See APPLY_GAMMA_MATRICES. compute_gamma_matrices is left untouched
+      % for the Jacobian, which genuinely needs Gamma as an explicit matrix.
+      B = apply_gamma_matrices(img, u);
    else
-       error('Unknown sensor axes configuration. Please check the sensor axes fields.');
-   end
+      img = compute_gamma_matrices(img);
 
-   switch recon_mode
-      case 'mdeit1'
-         B = img.Gamma*u; % Measurement in the sensor axis direction for every sensor for every stimulation pattern
-         B = B(:); % Flatten the matrix into a vector
-      case 'mdeit3'
-           Bx = img.Gamma1*u; % Measurement in axis1 direction for every sensor for every stimulation pattern
-           By = img.Gamma2*u;
-           Bz = img.Gamma3*u;
-           B = [Bx(:); By(:); Bz(:)];
-      otherwise
-           error('Unknown reconstruction mode: %s', recon_mode);
+      % Check which reconstruction mode is being used based on the sensor axes fields
+      if isfield(img.fwd_model.sensors(1).axes, 'axis')
+          recon_mode = 'mdeit1';
+      elseif isfield(img.fwd_model.sensors(1).axes, 'axis1') && ...
+             isfield(img.fwd_model.sensors(1).axes, 'axis2') && ...
+             isfield(img.fwd_model.sensors(1).axes, 'axis3')
+          recon_mode = 'mdeit3';
+      else
+          error('Unknown sensor axes configuration. Please check the sensor axes fields.');
+      end
+
+      switch recon_mode
+         case 'mdeit1'
+            B = img.Gamma*u; % Measurement in the sensor axis direction for every sensor for every stimulation pattern
+            B = B(:); % Flatten the matrix into a vector
+         case 'mdeit3'
+              Bx = img.Gamma1*u; % Measurement in axis1 direction for every sensor for every stimulation pattern
+              By = img.Gamma2*u;
+              Bz = img.Gamma3*u;
+              B = [Bx(:); By(:); Bz(:)];
+         otherwise
+              error('Unknown reconstruction mode: %s', recon_mode);
+      end
    end
 end
 
@@ -213,6 +226,48 @@ function pp = set_gnd_node(fwd_model, pp);
       d2  =  sum(bsxfun(@minus,fwd_model.nodes,ctr).^2,2);
       [~,pp.gnd_node] = min(d2);
       eidors_msg('Warning: no ground node found: choosing node %d',pp.gnd_node(1),1);
+   end
+
+% Decide whether to build Gamma explicitly (compute_gamma_matrices) or apply
+% it matrix-free (apply_gamma_matrices). Gamma is 1 or 3 dense
+% n_sensors x n_nodes arrays (mdeit1 / mdeit3); past a size threshold that
+% is more memory than it is worth building just to form Gamma*u once.
+%    fwd_model.mdeit.matrix_free = true|false   forces the path outright
+%    fwd_model.mdeit.gamma_max_bytes             overrides the size threshold
+function tf = use_matrix_free(img)
+   fwd_model = img.fwd_model;
+   try
+      tf = logical(fwd_model.mdeit.matrix_free);
+      return
+   end
+
+   n_sens  = numel(fwd_model.sensors);
+   n_nodes = size(fwd_model.nodes,1);
+   if isfield(fwd_model.sensors(1).axes, 'axis')
+      n_gamma = 1; % mdeit1
+   else
+      n_gamma = 3; % mdeit3
+   end
+   bytes = 8 * n_sens * n_nodes * n_gamma;
+
+   % Benchmarked on tests/bench_fwd_solve_cache.m's cylinder model (n_sensors
+   % = 64, n_nodes = 43769, Gamma = 64 MB): matrix-free won on wall-clock at
+   % every n_stim from 1 to 64 (27x down to 1.5x as n_stim grows) and used
+   % ~2000x less peak memory. It also won on a tiny model (Gamma << 1 MB;
+   % forming and matrix-free are both sub-3ms there, so it doesn't matter in
+   % absolute terms). No configuration tested favoured forming Gamma
+   % explicitly, so the default threshold is set well below the 64 MB point
+   % that was actually measured, rather than the original 512 MB guess.
+   limit = 32*1024^2; % default: 32 MB
+   try
+      limit = fwd_model.mdeit.gamma_max_bytes;
+   end
+
+   tf = bytes > limit;
+   if tf
+      eidors_msg('fwd_solve_1st_order_mdeit: using matrix-free Gamma*u (Gamma would be %.0f MB)', bytes/1024^2, 2);
+   else
+      eidors_msg('fwd_solve_1st_order_mdeit: forming Gamma explicitly (%.0f MB)', bytes/1024^2, 2);
    end
 
 % Solve the reduced linear system E*X = RHS.

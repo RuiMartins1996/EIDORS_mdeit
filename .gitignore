@@ -6,3 +6,7 @@
 # Ignore all .asv files
 *.asv
 
+# Cached benchmark model built by tests/bench_fwd_solve_cache.m (large: fmdl.R
+# is a dense n_sensors x n_elem array, hundreds of MB). Regenerated on demand.
+/tests/bench_fwd_solve_cache_fmdl.mat
+
