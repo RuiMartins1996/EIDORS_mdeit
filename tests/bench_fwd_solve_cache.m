@@ -49,6 +49,132 @@ eidors_cache
 
 bench_gamma_forming_vs_matrix_free(img);
 
+bench_pcg_ichol_cache(fmdl);
+
+end
+
+
+function bench_pcg_ichol_cache(fmdl)
+% Phase 4 (ICHOL_CACHE_PLAN.md): the ichol preconditioner used by the pcg
+% solve path, cached via eidors_cache keyed on the reduced matrix E. Same
+% cylinder model as the rest of this file, with fwd_model.solve_mdeit.method
+% = 'pcg' (the cached fmdl above defaults to left_divide, so this is a
+% genuinely new configuration).
+
+fprintf('\n== pcg path: ichol preconditioner cache (Phase 4) ==\n');
+
+fmdl_pcg = fmdl;
+fmdl_pcg.solve_mdeit.method = 'pcg';
+img_pcg = mk_image(fmdl_pcg, 1.0);
+
+eidors_cache('clear_all');
+eidors_cache('debug_on', 'build_ichol');
+
+tic; d1 = fwd_solve_1st_order_mdeit(img_pcg); t1 = toc;   % cold: builds ichol
+tic; d2 = fwd_solve_1st_order_mdeit(img_pcg); t2 = toc;   % warm: reuses cached ichol
+tic; d3 = fwd_solve_1st_order_mdeit(img_pcg); t3 = toc;
+
+eidors_cache('debug_off', 'build_ichol');
+
+fprintf('pcg path: cold %.2fs | warm %.2fs | warm %.2fs\n', t1, t2, t3);
+fprintf('meas identical: %d\n', isequal(d1.meas, d2.meas));
+fprintf(['NOTE: this cold/warm gap is NOT a clean build_ichol number - the ' ...
+   'first parfor call in this MATLAB session also pays one-time ' ...
+   'parallel-pool startup (tens of seconds; see the isolated timing ' ...
+   'below for the real build_ichol figure).\n']);
+
+% Isolate build_ichol alone, the same way the Phase 1 work isolated
+% calc_system_mat's hash cost from the full solve. build_ichol is a LOCAL
+% function of fwd_solve_1st_order_mdeit.m (deliberately not moved to its own
+% file - see ICHOL_CACHE_PLAN.md), so it cannot be called or handled (@build_
+% ichol) from this file: MATLAB local/subfunctions are only visible within
+% their own defining file. Two consequences below:
+%  1. The "cached" loop can still legitimately probe the real cache entry
+%     that fwd_solve_1st_order_mdeit just populated above: eidors_cache's
+%     shorthand interface looks up entries by (fstr, hash(cache_obj)) BEFORE
+%     ever touching the function handle (see cache_shorthand in
+%     eidors_cache.m) - the handle is only invoked on a genuine miss. So
+%     passing any valid handle with the same fstr/cache_obj is a real cache
+%     hit against the actual Lic build by the actual build_ichol, not a
+%     simulation.
+%  2. The "uncached" loop has no such option - there is no way to invoke the
+%     real build_ichol from outside its file - so it runs LOCAL_BUILD_ICHOL
+%     below, a literal copy of build_ichol's body (fwd_solve_1st_order_mdeit.m
+%     lines 361-388), kept only for this benchmark's isolation number.
+E = pcg_reduced_matrix(img_pcg);
+
+nrep = 5;
+copt.fstr = 'build_ichol';
+
+t_cached = zeros(nrep,1);
+for i = 1:nrep
+   t0 = tic;
+   Lic = eidors_cache(@local_build_ichol, {E}, copt); %#ok<NASGU> % real cache hit
+   t_cached(i) = toc(t0);
+end
+
+t_uncached = zeros(nrep,1);
+for i = 1:nrep
+   t0 = tic;
+   evalc('local_build_ichol(E);'); % evalc suppresses the per-rep fprintf
+   t_uncached(i) = toc(t0);
+end
+
+fprintf('build_ichol alone: cached (cache hit) mean=%.4fs | uncached (rebuild) mean=%.4fs over %d reps\n', ...
+   mean(t_cached), mean(t_uncached), nrep);
+fprintf('speedup (uncached/cached) = %.1fx\n', mean(t_uncached)/mean(t_cached));
+
+end
+
+
+function E = pcg_reduced_matrix(img)
+% Reproduce the exact reduced matrix E that fwd_solve_1st_order_mdeit builds
+% internally for this img, so the isolated build_ichol timing above runs on
+% the real E (and therefore hits the real cache entry). Mirrors
+% fwd_solve_1st_order_mdeit.m's own lean-img system-matrix assembly
+% (mdeit_lean_img + calc_system_mat) and its set_gnd_node fallback (pick the
+% node nearest the model centroid) for the single-ground-node case that
+% 'meas_current' stimulation always collapses to.
+img_lean  = mdeit_lean_img(img);
+fmdl_lean = img_lean.fwd_model;
+
+s_mat = calc_system_mat(img_lean);
+
+ctr = mean(fmdl_lean.nodes,1);
+d2  = sum(bsxfun(@minus,fmdl_lean.nodes,ctr).^2,2);
+[~,gnd_node] = min(d2);
+
+idx = 1:size(s_mat.E,1);
+idx(gnd_node) = [];
+E = s_mat.E(idx,idx);
+end
+
+
+function Lic = local_build_ichol(E)
+% Literal copy of fwd_solve_1st_order_mdeit.m's local BUILD_ICHOL, kept only
+% to time an "uncached" rebuild from this file (see bench_pcg_ichol_cache) -
+% real build_ichol cannot be called from outside its defining file. Keep in
+% sync with the original by hand if that function changes.
+base_opts = struct('type','ict','droptol',1e-3,'michol','on');
+alpha = 0;
+fprintf('local_build_ichol: Building iChol preconditioner\n');
+for attempt = 1:8
+   opts = base_opts; opts.diagcomp = alpha;
+   try
+      Lic = ichol(E, opts);
+      return
+   catch
+      if alpha == 0
+         dg = full(diag(E));
+         alpha = max( max(sum(abs(E),2)./max(dg,eps)) - 2, 1e-4 );
+      else
+         alpha = alpha * 2;
+      end
+   end
+end
+eidors_msg(['local_build_ichol: ichol preconditioner failed; ' ...
+   'falling back to unpreconditioned pcg'], 1);
+Lic = [];
 end
 
 

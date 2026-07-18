@@ -301,7 +301,16 @@ function X = solve_reduced_system(E, RHS, fwd_model)
          % (fine-mesh) systems and returns a residual larger than the small
          % B-field difference used for difference imaging -> speckle noise.
          % Built once here (same E for every RHS) and reused by all workers.
-         Lic = build_ichol(E);
+         % Cached via eidors_cache keyed on E alone (sparse, cheap to hash),
+         % same pattern as calc_system_mat/fwd_model_parameters: repeat calls
+         % with the same E (same mesh/conductivity) skip the ichol rebuild.
+         % NB: build_ichol's droptol/michol/diagcomp are hardcoded constants,
+         % not read from fwd_model, so keying on E alone is correct today. If
+         % those ever become fwd_model.solve_mdeit.* options, this cache key
+         % must widen to include them, or a config change could silently
+         % reuse a stale Lic built with different options.
+         copt.fstr = 'build_ichol';
+         Lic = eidors_cache(@build_ichol, {E}, copt);
          % Progress counter: parfor completes out of order, so tick a
          % client-side counter as each RHS finishes via a DataQueue.
          pcg_progress('reset', nrhs);
